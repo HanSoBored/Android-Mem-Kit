@@ -3,6 +3,9 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    if std::env::var("DOCS_RS").is_ok() {
+        return;
+    }
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     if target_os != "android" {
         println!("cargo:warning=android-mem-kit is designed for Android targets.");
