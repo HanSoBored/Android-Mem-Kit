@@ -13,11 +13,17 @@ fn main() {
     }
 
     // --- 1. Build XDL (C Library) ---
-    // Xdl bypasses linker restrictions. Essential for Android 7+.
+    let xdl_base = PathBuf::from("deps/xdl/xdl/src/main/cpp");
+
     cc::Build::new()
-        .file("deps/xdl/xdl/src/main/cpp/xdl.c")
-        .include("deps/xdl/xdl/src/main/cpp/include")
+        .file(xdl_base.join("xdl.c"))
+        .file(xdl_base.join("xdl_iterate.c"))
+        .file(xdl_base.join("xdl_linker.c"))
+        .file(xdl_base.join("xdl_lzma.c"))
+        .file(xdl_base.join("xdl_util.c"))
+        .include(xdl_base.join("include"))
         .compile("xdl");
+
     println!("cargo:rustc-link-lib=static=xdl");
 
     // --- 2. Build KittyMemory (C++ Library) ---
@@ -28,16 +34,19 @@ fn main() {
         .file("deps/KittyMemory/KittyMemory/MemoryPatch.cpp")
         .file("deps/KittyMemory/KittyMemory/KittyUtils.cpp")
         .include("deps/KittyMemory/KittyMemory")
+        .cpp_link_stdlib("c++_static")
         .compile("kittymemory");
-    println!("cargo:rustc-link-lib=static=kittymemory");
 
     // --- 3. Build Dobby (Hooking) ---
-    let ndk_home = env::var("ANDROID_NDK_HOME").expect("Error: Environment variable ANDROID_NDK_HOME belum diset!");
-    let toolchain_path = PathBuf::from(&ndk_home)
-        .join("build/cmake/android.toolchain.cmake");
+    let ndk_home = env::var("ANDROID_NDK_HOME")
+        .expect("Error: Environment variable ANDROID_NDK_HOME belum diset!");
+    let toolchain_path = PathBuf::from(&ndk_home).join("build/cmake/android.toolchain.cmake");
 
     if !toolchain_path.exists() {
-        panic!("Toolchain file tidak ditemukan di: {}", toolchain_path.display());
+        panic!(
+            "Toolchain file tidak ditemukan di: {}",
+            toolchain_path.display()
+        );
     }
 
     let dst = cmake::Config::new("deps/Dobby")
@@ -45,12 +54,12 @@ fn main() {
         .define("CMAKE_TOOLCHAIN_FILE", toolchain_path)
         .define("ANDROID_PLATFORM", "android-24")
         .define("ANDROID_ABI", "arm64-v8a")
-        .define("BUILD_SHARED_LIBS", "OFF") 
-        .build_target("dobby_static") 
+        // PENTING: Beritahu CMake/NDK untuk pakai static STL
+        .define("ANDROID_STL", "c++_static")
+        .define("BUILD_SHARED_LIBS", "OFF")
+        .build_target("dobby_static")
         .build();
-    
     println!("cargo:rustc-link-search=native={}/build", dst.display());
-    
     // Link library
     println!("cargo:rustc-link-lib=static=dobby");
 
@@ -65,7 +74,8 @@ fn main() {
         .file("src/bridge/bridge.cpp")
         .include(kittymemory_include)
         .include(xdl_include)
+        // PENTING: Paksa bridge juga pakai static
+        .cpp_link_stdlib("c++_static")
         .compile("memkit_bridge");
-
-    println!("cargo:rustc-link-lib=static=memkit_bridge");
 }
+
