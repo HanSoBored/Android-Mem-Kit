@@ -34,6 +34,12 @@ extern "C" {
         return patch->Restore() ? 1 : 0;
     }
 
+    void bridge_patch_delete(void* patch_ptr) {
+        if (patch_ptr) {
+            delete static_cast<MemoryPatch*>(patch_ptr);
+        }
+    }
+
     // --- ANDROID: ITERASI MAPS MANUAL ---
     uintptr_t bridge_get_module_base(const char* lib_name) {
         if (lib_name == nullptr) return 0;
