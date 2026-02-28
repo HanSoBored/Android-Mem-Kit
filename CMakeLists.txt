@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(memkit C)
+project(memkit C ASM)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -47,10 +47,10 @@ if(USE_LOCAL_DEPS)
     # Use local dependencies (faster, offline builds)
 
     # XDL library
-    set(XDL_DIR ${CMAKE_SOURCE_DIR}/deps/xdl)
+    set(XDL_DIR ${CMAKE_SOURCE_DIR}/deps/xdl/xdl)
     if(EXISTS ${XDL_DIR})
-        include_directories(${XDL_DIR}/include)
-        file(GLOB XDL_SOURCES ${XDL_DIR}/src/*.c)
+        include_directories(${XDL_DIR}/src/main/cpp/include)
+        file(GLOB XDL_SOURCES ${XDL_DIR}/src/main/cpp/*.c)
         add_library(xdl STATIC ${XDL_SOURCES})
         target_compile_definitions(xdl PRIVATE __ANDROID__API__=21)
         message(STATUS "Using local XDL: ${XDL_DIR}")
@@ -61,10 +61,50 @@ if(USE_LOCAL_DEPS)
     # ShadowHook library
     set(SHADOWHOOK_DIR ${CMAKE_SOURCE_DIR}/deps/shadowhook)
     if(EXISTS ${SHADOWHOOK_DIR})
-        include_directories(${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/include)
-        file(GLOB SHADOWHOOK_SOURCES
-            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/*.c
-            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/*.cc
+        # For arm64-v8a target
+        if(ANDROID_ABI STREQUAL "arm64-v8a")
+            set(SH_ARCH_DIR "arm64")
+        else()
+            set(SH_ARCH_DIR "arm")
+        endif()
+
+        include_directories(
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/include
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/arch/${SH_ARCH_DIR}
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/bsd
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/xdl
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/lss
+        )
+        set(SHADOWHOOK_SOURCES
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/arch/${SH_ARCH_DIR}/sh_a64.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/arch/${SH_ARCH_DIR}/sh_inst.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/arch/${SH_ARCH_DIR}/sh_glue.S
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/bytesig.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/sh_errno.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/sh_log.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/sh_ref.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/sh_trampo.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/sh_util.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/nothing/sh_nothing.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_elf.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_enter.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_hub.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_island.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_jni.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_linker.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_recorder.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_safe.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_switch.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_task.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/shadowhook.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/xdl/xdl.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/xdl/xdl_iterate.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/xdl/xdl_linker.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/xdl/xdl_lzma.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/xdl/xdl_util.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/bsd/queue.h
         )
         add_library(shadowhook STATIC ${SHADOWHOOK_SOURCES})
         target_compile_definitions(shadowhook PRIVATE __ANDROID__API__=21)
