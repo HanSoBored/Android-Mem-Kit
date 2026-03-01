@@ -98,6 +98,7 @@ if(USE_LOCAL_DEPS)
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_safe.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_switch.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_task.c
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_xdl.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/shadowhook.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/xdl/xdl.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/third_party/xdl/xdl_iterate.c
