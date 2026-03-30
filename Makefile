@@ -65,7 +65,7 @@ INCLUDES = -Iinclude \
 
 LDFLAGS = -shared -llog -landroid
 
-MEMKIT_SRCS = src/memory.c src/hooking.c src/il2cpp.c
+MEMKIT_SRCS = src/memory.c src/hooking.c src/il2cpp.c src/xdl_wrapper.c
 SH_DIR = deps/shadowhook/shadowhook/src/main/cpp
 SH_SRCS = $(SH_DIR)/arch/$(SH_ARCH)/sh_inst.c \
           $(SH_DIR)/arch/$(SH_ARCH)/sh_glue.S \
@@ -118,7 +118,7 @@ endef
 # Targets
 # ============================================================================
 
-.PHONY: all clean setup directories banner help
+.PHONY: all clean setup directories banner help test test-clean
 
 all: banner directories $(LIB_DIR)/libmemkit.so
 
@@ -157,6 +157,7 @@ directories:
 	@mkdir -p $(OBJ_DIR)/shadowhook/common
 	@mkdir -p $(OBJ_DIR)/shadowhook/nothing
 	@mkdir -p $(OBJ_DIR)/shadowhook/third_party/xdl
+	@mkdir -p $(OBJ_DIR)/tests
 	@mkdir -p $(LIB_DIR)
 
 $(LIB_DIR)/libmemkit.so: $(ALL_OBJS)
@@ -188,3 +189,32 @@ clean:
 	@echo "$(WHITE)Cleaning build directory...$(RESET)"
 	@echo ""
 	@rm -rf build/
+
+# ============================================================================
+# Unit Tests
+# ============================================================================
+
+TEST_SRCS = tests/xdl_wrapper_test.c
+TEST_OBJS = $(patsubst %.c,$(OBJ_DIR)/%.o,$(TEST_SRCS))
+TEST_BIN = $(LIB_DIR)/xdl_wrapper_test
+
+test: banner directories $(LIB_DIR)/libmemkit.so $(TEST_BIN)
+	@echo ""
+	@echo "$(WHITE)Test binary built successfully:$(RESET) $(TEST_BIN)"
+	@echo "$(YELLOW)Note:$(RESET) This is an Android binary. Push to device to run:"
+	@echo "  adb push $(TEST_BIN) /data/local/tmp/"
+	@echo "  adb shell /data/local/tmp/xdl_wrapper_test"
+	@echo ""
+
+$(TEST_BIN): $(TEST_OBJS) $(LIB_DIR)/libmemkit.so
+	@printf "$(WHITE)[TEST] $(YELLOW)[LD] $(WHITE)%s$(RESET)\n" "$@"
+	@$(CC) $(LDFLAGS) -o $@ $(TEST_OBJS) -L$(LIB_DIR) -lmemkit
+
+$(OBJ_DIR)/tests/%.o: tests/%.c
+	$(call update_progress)
+	$(call print_progress,"[CC]","$<",$(PERCENT))
+	@$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+test-clean:
+	@echo "$(WHITE)Cleaning test binaries...$(RESET)"
+	@rm -f $(TEST_BIN)
