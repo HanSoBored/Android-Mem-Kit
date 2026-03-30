@@ -145,6 +145,7 @@ add_library(memkit SHARED
     src/memory.c
     src/hooking.c
     src/il2cpp.c
+    src/xdl_wrapper.c
 )
 
 target_include_directories(memkit PRIVATE
