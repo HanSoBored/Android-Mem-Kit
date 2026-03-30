@@ -314,12 +314,11 @@ static void* research_thread(void* arg) {
     }
     
     LOGI("");
-    LOGI("=== Research Guidelines ===");
+    LOGI(" Research Guidelines ");
     LOGI("1. Only analyze apps you have authorization to test");
     LOGI("2. Document findings responsibly");
     LOGI("3. Follow responsible disclosure if vulnerabilities found");
     LOGI("4. Respect user privacy and data");
-    LOGI("=============================");
 
     return NULL;
 }
