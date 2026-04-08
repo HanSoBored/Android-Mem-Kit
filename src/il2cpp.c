@@ -5,7 +5,6 @@
 #include <stdatomic.h>
 
 #include "memkit.h"
-#include "xdl.h"
 
 // ============================================================================
 // IL2CPP: STATIC STATE (Thread-Safe via C11 Atomics)
@@ -21,10 +20,10 @@ static atomic_bool g_initialized = ATOMIC_VAR_INIT(false);
 bool memkit_il2cpp_init(void) {
     bool expected = false;
     
-    // Only the first thread (CAS succeeds) executes xdl_open
+    // Only the first thread (CAS succeeds) executes memkit_xdl_open
     // atomic_compare_exchange_strong: 100% thread-safe, lock-free
     if (atomic_compare_exchange_strong(&g_initialized, &expected, true)) {
-        g_il2cpp_handle = xdl_open("libil2cpp.so", XDL_DEFAULT);
+        g_il2cpp_handle = memkit_xdl_open("libil2cpp.so", XDL_DEFAULT);
     }
     
     // Wait briefly if another thread is still opening the handle (rare case)
@@ -60,16 +59,16 @@ void* memkit_il2cpp_resolve(const char* symbol_name) {
 
     // If handle is NULL, try to open directly
     if (!g_il2cpp_handle) {
-        g_il2cpp_handle = xdl_open("libil2cpp.so", XDL_DEFAULT);
+        g_il2cpp_handle = memkit_xdl_open("libil2cpp.so", XDL_DEFAULT);
         if (!g_il2cpp_handle) {
             return NULL;
         }
     }
 
     // Resolve the symbol using XDL
-    // xdl_sym searches in .dynsym (dynamic symbol table)
+    // memkit_xdl_sym searches in .dynsym (dynamic symbol table)
     // This is where most exported functions live
-    return xdl_sym(g_il2cpp_handle, symbol_name, NULL);
+    return memkit_xdl_sym(g_il2cpp_handle, symbol_name, NULL);
 }
 
 // ============================================================================
@@ -89,10 +88,10 @@ void* memkit_il2cpp_resolve_symtab(const char* symbol_name) {
         return NULL;
     }
 
-    // Use xdl_dsym to search only in .symtab section
+    // Use memkit_xdl_dsym to search only in .symtab section
     // This is useful for:
     // - Stripped symbols
     // - Internal/private functions
     // - Debug symbols
-    return xdl_dsym(g_il2cpp_handle, symbol_name, NULL);
+    return memkit_xdl_dsym(g_il2cpp_handle, symbol_name, NULL);
 }

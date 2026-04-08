@@ -168,6 +168,24 @@ typedef struct {
 typedef struct memkit_addr_ctx memkit_addr_ctx_t;
 
 // ============================================================================
+// XDL FLAG CONSTANTS
+// ============================================================================
+
+/* memkit_xdl_open() flags */
+#define XDL_DEFAULT           0x00
+#define XDL_TRY_FORCE_LOAD    0x01
+#define XDL_ALWAYS_FORCE_LOAD 0x02
+
+/* memkit_xdl_addr_to_symbol4() flags */
+#define XDL_NON_SYM           0x01
+
+/* memkit_xdl_iterate() flags */
+#define XDL_FULL_PATHNAME     0x01
+
+/* xdl_dlinfo() selector */
+#define XDL_DI_DLINFO         1
+
+// ============================================================================
 // XDL WRAPPER API - PHASE 1: CORE DISCOVERY
 // ============================================================================
 
