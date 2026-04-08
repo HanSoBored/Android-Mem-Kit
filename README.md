@@ -170,7 +170,8 @@ Android-Mem-Kit/
 ├── src/
 │   ├── memory.c            # Memory patching (mprotect-based)
 │   ├── hooking.c           # ShadowHook wrapper
-│   └── il2cpp.c            # XDL wrapper for symbol resolution
+│   ├── il2cpp.c            # IL2CPP symbol resolution (uses memkit_xdl_* wrapper)
+│   └── xdl_wrapper.c       # Generic xDL wrapper layer
 ├── examples/
 │   └── main.c              # Complete usage example
 ├── docs/
