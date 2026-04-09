@@ -169,7 +169,12 @@ Android-Mem-Kit/
 │   └── memkit.h            # Public API header
 ├── src/
 │   ├── memory.c            # Memory patching (mprotect-based)
-│   ├── hooking.c           # ShadowHook wrapper
+│   ├── hooking.c           # ShadowHook wrapper (basic hook/unhook)
+│   ├── hooking_flags.c     # V2 hook API with mode flags
+│   ├── intercept.c         # Intercept API (pre-call inspection)
+│   ├── records.c           # Records API (operation logging)
+│   ├── runtime_config.c    # Runtime configuration (debuggable, recordable)
+│   ├── dl_callbacks.c      # DL init/fini callbacks
 │   ├── il2cpp.c            # IL2CPP symbol resolution (uses memkit_xdl_* wrapper)
 │   └── xdl_wrapper.c       # Generic xDL wrapper layer
 ├── examples/
@@ -208,6 +213,7 @@ memkit_patch_free(patch);
 // Initialize (call once)
 memkit_hook_init(SHADOWHOOK_MODE_UNIQUE, false);
 
+// --- Basic Hook API ---
 // Hook by symbol
 void* stub = memkit_hook_by_symbol("lib.so", "func_name", my_func, (void**)&orig);
 
@@ -216,6 +222,59 @@ void* stub = memkit_hook(address, my_func, (void**)&orig);
 
 // Unhook
 memkit_unhook(stub);
+
+// --- V2 Hook API (with flags) ---
+void* stub = memkit_hook_v2("lib.so", "func_name", my_func, (void**)&orig, MK_HOOK_DEFAULT);
+void* stub = memkit_hook_by_symbol_v2("lib.so", "func_name", my_func, (void**)&orig, MK_HOOK_RECORD);
+
+// --- Hook with Callback ---
+void* stub = memkit_hook_with_callback("lib.so", "func", my_func, (void**)&orig, my_hooked_cb, NULL);
+
+// --- Intercept API (pre-call inspection) ---
+void* stub = memkit_intercept_by_symbol("lib.so", "func", my_interceptor, NULL, MK_INTERCEPT_DEFAULT);
+memkit_unintercept(stub);
+
+// --- Records API ---
+char* csv = memkit_get_records(MK_RECORD_ITEM_ALL);  // caller must free()
+memkit_dump_records_fd(STDOUT_FILENO, MK_RECORD_ITEM_ALL);
+
+// --- Runtime Configuration ---
+memkit_set_debuggable(true);
+memkit_set_recordable(true);
+memkit_set_disable(true);  // global disable switch
+
+// --- DL Callbacks ---
+memkit_register_dl_init_callback(my_dl_init_pre, my_dl_init_post, NULL);
+memkit_register_dl_fini_callback(my_dl_fini_pre, my_dl_fini_post, NULL);
+```
+
+### Proxy/Stack Macros
+
+```c
+// In MULTI mode: call previous hook in chain
+int my_proxy(int a, const char* b) {
+    int ret = MEMKIT_CALL_PREV(my_proxy, int(*)(int, const char*), a, b);
+    MEMKIT_POP_STACK();
+    return ret;
+}
+
+// Control reentrancy
+MEMKIT_ALLOW_REENTRANT();
+MEMKIT_DISALLOW_REENTRANT();
+
+// Get return address of caller
+void* ret_addr = MEMKIT_RETURN_ADDRESS();
+```
+
+### Error Handling
+
+```c
+// Get error code and message
+int err = memkit_errno();
+const char* msg = memkit_strerror(err);
+LOGE("Hook failed: %d - %s", err, msg);
+
+// 46 MK_ERRNO_* constants available (MK_ERRNO_OK through MK_ERRNO_DISABLED)
 ```
 
 ### IL2CPP Functions (Unity Apps)
@@ -281,13 +340,53 @@ memkit_hook_by_symbol("libtarget.so", "targetFunc",
 
 ---
 
-## ShadowHook Modes
+## ShadowHook Modes & Capabilities
+
+### Hooking Modes
 
 | Mode | Description | Use Case |
 | :--- | :--- | :--- |
 | `SHADOWHOOK_MODE_UNIQUE` | Same address can only be hooked once | Most research scenarios |
 | `SHADOWHOOK_MODE_SHARED` | Multiple hooks allowed (recursion prevention) | When using multiple SDKs |
-| `SHADOWHOOK_MODE_MULTI` | Multiple hooks allowed (no prevention) | Advanced use cases |
+| `SHADOWHOOK_MODE_MULTI` | Multiple hooks allowed (no prevention) | Advanced chaining use cases |
+
+### V2 Hook Flags
+
+| Flag | Description |
+| :--- | :--- |
+| `MK_HOOK_DEFAULT` | Default behavior (respects init mode) |
+| `MK_HOOK_WITH_SHARED_MODE` | Force SHARED mode for this hook |
+| `MK_HOOK_WITH_UNIQUE_MODE` | Force UNIQUE mode for this hook |
+| `MK_HOOK_WITH_MULTI_MODE` | Force MULTI mode for this hook |
+| `MK_HOOK_RECORD` | Enable recording for this hook operation |
+
+### Intercept Flags
+
+| Flag | Description |
+| :--- | :--- |
+| `MK_INTERCEPT_DEFAULT` | Standard intercept (no FP/SIMD context) |
+| `MK_INTERCEPT_WITH_FPSIMD_READ_ONLY` | Include FP/SIMD registers (read-only) |
+| `MK_INTERCEPT_WITH_FPSIMD_WRITE_ONLY` | Include FP/SIMD registers (write-only) |
+| `MK_INTERCEPT_WITH_FPSIMD_READ_WRITE` | Include FP/SIMD registers (read-write) |
+| `MK_INTERCEPT_RECORD` | Enable recording for this intercept |
+
+### Runtime Configuration
+
+| Feature | Description |
+| :--- | :--- |
+| `memkit_set_debuggable()` | Toggle debug logging at runtime |
+| `memkit_set_recordable()` | Enable/disable operation recording |
+| `memkit_set_disable()` | Global enable/disable switch |
+| `MK_IS_SHARED_MODE` | Macro to check current mode |
+| `MK_IS_UNIQUE_MODE` | Macro to check current mode |
+| `MK_IS_MULTI_MODE` | Macro to check current mode |
+
+### DL Callbacks
+
+| Callback | Description |
+| :--- | :--- |
+| `memkit_register_dl_init_callback()` | Called when a library is loaded (dlopen) |
+| `memkit_register_dl_fini_callback()` | Called when a library is unloaded (dlclose) |
 
 ---
 

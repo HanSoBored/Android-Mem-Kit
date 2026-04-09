@@ -72,12 +72,155 @@ void init() {
 
 ### Hooking Functions
 
+#### Basic Hook API
+
 | Function | Description | Returns |
 |----------|-------------|---------|
 | `memkit_hook_init(mode, debuggable)` | Initialize ShadowHook | `int` (0 = success) |
 | `memkit_hook(addr, replace, &orig)` | Hook function by address | `stub` or NULL |
 | `memkit_hook_by_symbol(lib, sym, func, &orig)` | Hook by symbol name | `stub` or NULL |
 | `memkit_unhook(stub)` | Unhook function | `void` |
+
+#### V2 Hook API
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_hook_v2(lib, sym, new, &orig, flags)` | Hook with mode flags | `stub` or NULL |
+| `memkit_hook_by_symbol_v2(lib, sym, new, &orig, flags)` | Hook by symbol with flags | `stub` or NULL |
+
+**V2 Hook Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `MK_HOOK_DEFAULT` | Default behavior (respects init mode) |
+| `MK_HOOK_WITH_SHARED_MODE` | Force SHARED mode for this hook |
+| `MK_HOOK_WITH_UNIQUE_MODE` | Force UNIQUE mode for this hook |
+| `MK_HOOK_WITH_MULTI_MODE` | Force MULTI mode for this hook |
+| `MK_HOOK_RECORD` | Enable recording for this hook operation |
+
+#### Hook with Callback
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_hook_with_callback(lib, sym, new, &orig, cb, arg)` | Hook with completion callback | `stub` or NULL |
+| `memkit_hook_by_symbol_callback(lib, sym, new, &orig, cb, arg)` | Alias for above | `stub` or NULL |
+
+**Callback Types:**
+
+| Type | Description |
+|------|-------------|
+| `MemKitHooked` | Called when hook operation completes (success or failure) |
+| `MemKitIntercepted` | Called when intercept operation completes |
+| `MemKitInterceptor` | Receives CPU context on each call to target |
+
+#### Intercept API
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_intercept(addr, pre, data, flags, ...)` | Intercept by address | `stub` or NULL |
+| `memkit_intercept_by_symbol(lib, sym, pre, data, flags)` | Intercept by symbol | `stub` or NULL |
+| `memkit_intercept_by_sym_addr(addr, pre, data, flags, ...)` | Intercept by symbol address | `stub` or NULL |
+| `memkit_intercept_at_instr(addr, pre, data, flags, ...)` | Intercept at specific instruction | `stub` or NULL |
+| `memkit_intercept_with_callback(lib, sym, pre, data, flags, cb, arg)` | Intercept with callback | `stub` or NULL |
+| `memkit_unintercept(stub)` | Remove interceptor | `int` |
+
+**Intercept Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `MK_INTERCEPT_DEFAULT` | Standard intercept (no FP/SIMD context) |
+| `MK_INTERCEPT_WITH_FPSIMD_READ_ONLY` | Include FP/SIMD registers (read-only) |
+| `MK_INTERCEPT_WITH_FPSIMD_WRITE_ONLY` | Include FP/SIMD registers (write-only) |
+| `MK_INTERCEPT_WITH_FPSIMD_READ_WRITE` | Include FP/SIMD registers (read-write) |
+| `MK_INTERCEPT_RECORD` | Enable recording for this intercept |
+
+**Context Types:**
+
+| Type | Description |
+|------|-------------|
+| `MemKitCpuContext` | CPU context passed to interceptor |
+| `MemKitVReg` | NEON/VFP vector register |
+
+#### Records API
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_get_records(item_flags)` | Get records as CSV string | `char*` (caller frees) |
+| `memkit_dump_records_fd(fd, item_flags)` | Dump records to file descriptor | `void` |
+
+**Record Item Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `MK_RECORD_ITEM_TIMESTAMP` | Include timestamp |
+| `MK_RECORD_ITEM_CALLER_LIB_NAME` | Include caller library name |
+| `MK_RECORD_ITEM_OP` | Include operation type |
+| `MK_RECORD_ITEM_LIB_NAME` | Include target library name |
+| `MK_RECORD_ITEM_SYM_NAME` | Include symbol name |
+| `MK_RECORD_ITEM_SYM_ADDR` | Include symbol address |
+| `MK_RECORD_ITEM_NEW_ADDR` | Include new function address |
+| `MK_RECORD_ITEM_BACKUP_LEN` | Include backup length |
+| `MK_RECORD_ITEM_ERRNO` | Include error code |
+| `MK_RECORD_ITEM_STUB` | Include stub pointer |
+| `MK_RECORD_ITEM_FLAGS` | Include flags |
+| `MK_RECORD_ITEM_ALL` | Include all fields (0x7FF) |
+
+#### Runtime Configuration
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_get_mode()` | Get current hooking mode | `int` |
+| `memkit_set_debuggable(val)` | Enable/disable debug logging | `void` |
+| `memkit_get_debuggable()` | Check debug mode status | `bool` |
+| `memkit_set_recordable(val)` | Enable/disable recording | `void` |
+| `memkit_get_recordable()` | Check recording status | `bool` |
+| `memkit_set_disable(val)` | Global enable/disable switch | `void` |
+| `memkit_get_disable()` | Check disabled status | `bool` |
+
+**Mode Check Macros:**
+
+| Macro | Description |
+|-------|-------------|
+| `MK_IS_SHARED_MODE` | Evaluates to true if in SHARED mode |
+| `MK_IS_UNIQUE_MODE` | Evaluates to true if in UNIQUE mode |
+| `MK_IS_MULTI_MODE` | Evaluates to true if in MULTI mode |
+
+#### DL Callbacks
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_register_dl_init_callback(pre, post, data)` | Register dlopen callback | `int` |
+| `memkit_unregister_dl_init_callback(pre, post, data)` | Unregister dlopen callback | `int` |
+| `memkit_register_dl_fini_callback(pre, post, data)` | Register dlclose callback | `int` |
+| `memkit_unregister_dl_fini_callback(pre, post, data)` | Unregister dlclose callback | `int` |
+
+**DL Callback Types:**
+
+| Type | Description |
+|------|-------------|
+| `MemKitDlInfo` | Library info for DL callbacks |
+| `MemKitDlInitCallback` | Called when library is loaded (dlopen) |
+| `MemKitDlFiniCallback` | Called when library is unloaded (dlclose) |
+
+#### Proxy/Stack Macros
+
+| Macro | Description |
+|-------|-------------|
+| `MEMKIT_CALL_PREV(func, func_sig, ...)` | Call previous function in proxy chain (MULTI mode) |
+| `MEMKIT_POP_STACK()` | Pop current stack frame after proxy call |
+| `MEMKIT_ALLOW_REENTRANT()` | Allow reentrant calls from same thread |
+| `MEMKIT_DISALLOW_REENTRANT()` | Disallow reentrant calls from same thread |
+| `MEMKIT_RETURN_ADDRESS()` | Get return address of current proxy caller |
+
+#### Proxy/Stack Functions
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_get_prev_func(func)` | Get previous function pointer | `void*` |
+| `memkit_pop_stack(return_addr)` | Pop stack frame | `void` |
+| `memkit_allow_reentrant(return_addr)` | Allow reentrancy | `void` |
+| `memkit_disallow_reentrant(return_addr)` | Disallow reentrancy | `void` |
+| `memkit_get_return_address()` | Get caller return address | `void*` |
 
 ### IL2CPP Functions
 
@@ -235,17 +378,324 @@ memkit_unhook(hook_stub);
 
 ### ShadowHook Macros
 
-ShadowHook provides convenient macros:
+MemKit provides convenient macros for proxy/stack management:
 
 ```c
-// In your hook function, call original using macro
-void my_hook(void* instance) {
-    // Option 1: Use stored original pointer
-    orig_function(instance);
-
-    // Option 2: Use SHADOWHOOK_CALL_PREV macro
-    SHADOWHOOK_CALL_PREV(my_hook, void (*)(void*), instance);
+// In MULTI mode: call the previous function in the proxy chain
+int my_proxy(int a, const char* b) {
+    int ret = MEMKIT_CALL_PREV(my_proxy, int(*)(int, const char*), a, b);
+    MEMKIT_POP_STACK();  // Must call at end of every proxy
+    return ret;
 }
+
+// Control reentrancy within a proxy
+MEMKIT_ALLOW_REENTRANT();    // Allow recursive calls from same thread
+MEMKIT_DISALLOW_REENTRANT(); // Block recursive calls
+
+// Get the return address of the current proxy caller
+void* ret_addr = MEMKIT_RETURN_ADDRESS();
+```
+
+### V2 Hook API
+
+The V2 API allows per-hook mode control with flags:
+
+```c
+// Hook with specific mode (overrides global init mode)
+void* stub = memkit_hook_v2(
+    "libtarget.so",
+    "target_function",
+    (void*)my_function,
+    (void**)&orig_function,
+    MK_HOOK_WITH_UNIQUE_MODE  // Force UNIQUE for this hook only
+);
+
+// Hook with recording enabled
+void* recorded_stub = memkit_hook_by_symbol_v2(
+    "libssl.so",
+    "SSL_read",
+    (void*)my_SSL_read,
+    (void**)&orig_SSL_read,
+    MK_HOOK_RECORD  // Log this hook operation
+);
+
+// Combine flags
+void* stub = memkit_hook_v2(
+    "libtarget.so",
+    "check_integrity",
+    (void*)my_check,
+    (void**)&orig_check,
+    MK_HOOK_WITH_SHARED_MODE | MK_HOOK_RECORD
+);
+```
+
+### Hook with Callback
+
+Get notified when a hook operation completes:
+
+```c
+// Completion callback — called after hook is installed (or fails)
+void on_hook_complete(int error_number, const char* lib_name,
+                      const char* sym_name, void* sym_addr,
+                      void* new_addr, void* orig_addr, void* arg) {
+    if (error_number == 0) {
+        LOGI("Hook installed: %s!%s at %p", lib_name, sym_name, sym_addr);
+    } else {
+        LOGE("Hook failed: %d — %s", error_number, memkit_strerror(error_number));
+    }
+}
+
+// Hook with callback
+void* stub = memkit_hook_with_callback(
+    "libtarget.so",
+    "target_function",
+    (void*)my_function,
+    (void**)&orig_function,
+    on_hook_complete,
+    NULL  // user arg passed to callback
+);
+
+// Same as above (alias)
+void* stub2 = memkit_hook_by_symbol_callback(
+    "libssl.so", "SSL_read",
+    (void*)my_SSL_read, (void**)&orig_SSL_read,
+    on_hook_complete, NULL
+);
+```
+
+### Intercept API
+
+The Intercept API allows you to inspect and modify CPU registers **before** the target function executes. Unlike hooks, interceptors receive the full CPU context and can modify arguments in-place.
+
+```c
+// Interceptor function — receives CPU context on each call
+static void my_interceptor(MemKitCpuContext* cpu_context, void* data) {
+    // Read arguments from registers (ARM64: x0-x7 hold first 8 args)
+    uint64_t arg0 = cpu_context->regs[0];
+    uint64_t arg1 = cpu_context->regs[1];
+
+    LOGI("Intercepted! arg0=0x%lx, arg1=0x%lx", arg0, arg1);
+
+    // Modify arguments before the target function sees them
+    cpu_context->regs[0] = 0;  // Zero out first argument
+
+    // Optionally skip calling the original function entirely
+    // by setting the PC to the return address
+}
+
+// Basic intercept by symbol
+void* stub = memkit_intercept_by_symbol(
+    "libtarget.so",
+    "target_function",
+    my_interceptor,
+    NULL,  // user data
+    MK_INTERCEPT_DEFAULT
+);
+
+// Intercept with FP/SIMD context (for functions using NEON)
+void* stub = memkit_intercept_by_symbol(
+    "libtarget.so",
+    "simd_function",
+    my_interceptor,
+    NULL,
+    MK_INTERCEPT_WITH_FPSIMD_READ_WRITE  // Include vfp/regs
+);
+
+// Remove interceptor
+memkit_unintercept(stub);
+```
+
+#### Intercept with Completion Callback
+
+```c
+void on_intercept_complete(int error_number, const char* lib_name,
+                           const char* sym_name, void* sym_addr,
+                           void* pre, void* data, void* arg) {
+    if (error_number == 0) {
+        LOGI("Intercept installed: %s!%s", lib_name, sym_name);
+    }
+}
+
+void* stub = memkit_intercept_with_callback(
+    "libtarget.so",
+    "check_signature",
+    my_interceptor,
+    NULL,
+    MK_INTERCEPT_DEFAULT,
+    on_intercept_complete,
+    NULL
+);
+```
+
+#### Intercept at Specific Instruction
+
+For advanced use cases where you need to intercept at a specific instruction offset:
+
+```c
+uintptr_t base = memkit_get_lib_base("libtarget.so");
+void* instr_addr = (void*)(base + 0x1234);  // Specific instruction
+
+void* stub = memkit_intercept_at_instr(
+    instr_addr,
+    my_interceptor,
+    NULL,
+    MK_INTERCEPT_DEFAULT
+);
+```
+
+#### Real-World Example: SSL Pinning Bypass via Intercept
+
+```c
+// Intercept SSL_CTX_set_verify to force VERIFY_NONE
+static void intercept_SSL_CTX_set_verify(MemKitCpuContext* ctx, void* data) {
+    // ARM64 calling convention: x0=ctx, x1=mode, x2=callback
+    uint64_t mode = ctx->regs[1];
+    LOGI("SSL_CTX_set_verify called with mode=0x%lx", mode);
+
+    // Force mode to VERIFY_NONE (0)
+    ctx->regs[1] = 0;
+}
+
+void* stub = memkit_intercept_by_symbol(
+    "libssl.so",
+    "SSL_CTX_set_verify",
+    intercept_SSL_CTX_set_verify,
+    NULL,
+    MK_INTERCEPT_DEFAULT
+);
+```
+
+#### Real-World Example: Integrity Check Bypass via Intercept
+
+```c
+// Intercept a signature verification function
+static void intercept_verify_signature(MemKitCpuContext* ctx, void* data) {
+    // Force return value to 1 (valid) by modifying x0 before return
+    // We can't modify return value directly in interceptor,
+    // but we can use a hook instead for post-call modification.
+    // Interceptors are best for argument inspection/modification.
+    LOGI("verify_signature called — arguments logged");
+}
+```
+
+### Records API
+
+MemKit can log all hook/intercept operations to a CSV format for analysis:
+
+```c
+// Enable recording globally
+memkit_set_recordable(true);
+
+// Get records as CSV string (caller must free)
+char* csv = memkit_get_records(MK_RECORD_ITEM_ALL);
+if (csv) {
+    LOGI("Operation records:\n%s", csv);
+    free(csv);
+}
+
+// Dump records directly to a file descriptor
+int fd = open("/data/local/tmp/memkit_records.csv", O_WRONLY | O_CREAT, 0644);
+if (fd >= 0) {
+    memkit_dump_records_fd(fd, MK_RECORD_ITEM_ALL);
+    close(fd);
+}
+
+// Selective recording — only include specific fields
+uint32_t flags = MK_RECORD_ITEM_TIMESTAMP
+               | MK_RECORD_ITEM_LIB_NAME
+               | MK_RECORD_ITEM_SYM_NAME
+               | MK_RECORD_ITEM_ERRNO;
+char* csv = memkit_get_records(flags);
+```
+
+#### Record Item Flags
+
+| Flag | Field |
+|------|-------|
+| `MK_RECORD_ITEM_TIMESTAMP` | Timestamp of operation |
+| `MK_RECORD_ITEM_CALLER_LIB_NAME` | Library that initiated the operation |
+| `MK_RECORD_ITEM_OP` | Operation type (hook, intercept, unhook) |
+| `MK_RECORD_ITEM_LIB_NAME` | Target library name |
+| `MK_RECORD_ITEM_SYM_NAME` | Target symbol name |
+| `MK_RECORD_ITEM_SYM_ADDR` | Symbol address |
+| `MK_RECORD_ITEM_NEW_ADDR` | Replacement function address |
+| `MK_RECORD_ITEM_BACKUP_LEN` | Backup length of trampoline |
+| `MK_RECORD_ITEM_ERRNO` | Error code (0 = success) |
+| `MK_RECORD_ITEM_STUB` | Stub pointer |
+| `MK_RECORD_ITEM_FLAGS` | Flags used |
+| `MK_RECORD_ITEM_ALL` | All fields (0x7FF) |
+
+### Runtime Configuration
+
+Control MemKit behavior at runtime:
+
+```c
+// Check current mode
+int mode = memkit_get_mode();
+if (MK_IS_UNIQUE_MODE) {
+    LOGI("Running in UNIQUE mode");
+} else if (MK_IS_SHARED_MODE) {
+    LOGI("Running in SHARED mode");
+}
+
+// Toggle debug logging
+memkit_set_debuggable(true);
+bool is_debug = memkit_get_debuggable();
+
+// Toggle recording at runtime
+memkit_set_recordable(true);
+bool is_recordable = memkit_get_recordable();
+
+// Global disable — suspends all hooking/intercepting
+memkit_set_disable(true);   // Disable all operations
+bool is_disabled = memkit_get_disable();
+memkit_set_disable(false);  // Re-enable
+```
+
+### DL Callbacks
+
+Register callbacks to be notified when libraries are loaded or unloaded:
+
+```c
+// Called before and after a library is loaded (dlopen)
+void dl_init_pre(struct dl_phdr_info* info, size_t size, void* data) {
+    LOGI("Library loading: %s", info->dlpi_name);
+}
+
+void dl_init_post(struct dl_phdr_info* info, size_t size, void* data) {
+    LOGI("Library loaded: %s at base 0x%lx", info->dlpi_name, info->dlpi_addr);
+}
+
+// Called before and after a library is unloaded (dlclose)
+void dl_fini_pre(struct dl_phdr_info* info, size_t size, void* data) {
+    LOGI("Library unloading: %s", info->dlpi_name);
+}
+
+void dl_fini_post(struct dl_phdr_info* info, size_t size, void* data) {
+    LOGI("Library unloaded: %s", info->dlpi_name);
+}
+
+// Register callbacks
+memkit_register_dl_init_callback(dl_init_pre, dl_init_post, NULL);
+memkit_register_dl_fini_callback(dl_fini_pre, dl_fini_post, NULL);
+
+// Unregister when done
+memkit_unregister_dl_init_callback(dl_init_pre, dl_init_post, NULL);
+memkit_unregister_dl_fini_callback(dl_fini_pre, dl_fini_post, NULL);
+```
+
+#### Real-World Example: Auto-Hook When Target Library Loads
+
+```c
+// Auto-hook SSL functions when libssl.so is loaded
+static void on_ssl_loaded(struct dl_phdr_info* info, size_t size, void* data) {
+    if (strstr(info->dlpi_name, "libssl.so")) {
+        LOGI("libssl.so detected — installing hooks...");
+        // Install hooks here
+    }
+}
+
+memkit_register_dl_init_callback(NULL, on_ssl_loaded, NULL);
 ```
 
 ---
@@ -315,27 +765,87 @@ thread_hook_stub = memkit_hook_by_symbol(
 
 ## Error Handling
 
-### Using errno
+### MemKit Error Functions
 
-All functions set `errno` on failure:
+MemKit provides its own error handling layer wrapping ShadowHook:
 
 ```c
 #include <errno.h>
 #include <string.h>
 
+// Get last error code from ShadowHook
+int err = memkit_errno();
+
+// Get human-readable error message
+const char* msg = memkit_strerror(err);
+LOGE("Operation failed: %d - %s", err, msg);
+
+// Get version string
+const char* version = memkit_version();
+LOGI("ShadowHook version: %s", version);
+
+// Get error from last shadowhook_init() call
+int init_err = memkit_init_errno();
+```
+
+### MK_ERRNO_* Constants
+
+MemKit exposes all 46 ShadowHook error codes:
+
+```c
+// Common error codes
+MK_ERRNO_OK                     // 0: Success
+MK_ERRNO_UNINIT                 // 2: Not initialized
+MK_ERRNO_INVALID_ARG            // 3: Invalid argument
+MK_ERRNO_OOM                    // 4: Out of memory
+MK_ERRNO_MPROT                  // 5: mprotect failed
+MK_ERRNO_HOOK_DLSYM             // 18: Symbol not found
+MK_ERRNO_HOOK_ENTER             // 24: Failed to enter hook
+MK_ERRNO_HOOK_DUP               // 20: Duplicate hook
+MK_ERRNO_UNHOOK_NOTFOUND        // 27: Unhook target not found
+MK_ERRNO_DISABLED               // 45: Operations disabled
+
+// Full list available in memkit.h:
+// MK_ERRNO_PENDING, MK_ERRNO_WRITE_CRASH, MK_ERRNO_INIT_ERRNO,
+// MK_ERRNO_INIT_SIGSEGV, MK_ERRNO_INIT_SIGBUS, MK_ERRNO_INTERCEPT_DUP,
+// MK_ERRNO_INIT_SAFE, MK_ERRNO_INIT_LINKER, MK_ERRNO_INIT_HUB,
+// MK_ERRNO_HUB_CREAT, MK_ERRNO_MONITOR_DLOPEN, MK_ERRNO_HOOK_UNIQUE_DUP,
+// MK_ERRNO_HOOK_DLOPEN_CRASH, MK_ERRNO_HOOK_DLSYM_CRASH,
+// MK_ERRNO_HOOK_DLADDR_CRASH, MK_ERRNO_HOOK_DLINFO, MK_ERRNO_HOOK_SYMSZ,
+// MK_ERRNO_HOOK_REWRITE_CRASH, MK_ERRNO_HOOK_REWRITE_FAILED,
+// MK_ERRNO_UNHOOK_CMP_CRASH, MK_ERRNO_UNHOOK_TRAMPO_MISMATCH,
+// MK_ERRNO_UNHOOK_EXIT_MISMATCH, MK_ERRNO_UNHOOK_EXIT_CRASH,
+// MK_ERRNO_UNHOOK_ON_ERROR, MK_ERRNO_UNHOOK_ON_UNFINISHED,
+// MK_ERRNO_ELF_ARCH_MISMATCH, MK_ERRNO_LINKER_ARCH_MISMATCH,
+// MK_ERRNO_DUP, MK_ERRNO_NOT_FOUND, MK_ERRNO_NOT_SUPPORT,
+// MK_ERRNO_INIT_TASK, MK_ERRNO_HOOK_ISLAND_EXIT,
+// MK_ERRNO_HOOK_ISLAND_ENTER, MK_ERRNO_HOOK_ISLAND_REWRITE,
+// MK_ERRNO_MODE_CONFLICT, MK_ERRNO_HOOK_MULTI_DUP
+```
+
+### Using memkit_strerror()
+
+```c
 void* stub = memkit_hook_by_symbol("lib.so", "func", my_func, (void**)&orig);
 if (stub == NULL) {
-    LOGE("Hook failed: %s", strerror(errno));
+    int err = memkit_errno();
+    const char* msg = memkit_strerror(err);
+    LOGE("Hook failed: %d - %s", err, msg);
 
-    // Common errors:
-    // EINVAL - Invalid argument
-    // ENOENT - Symbol not found
-    // EACCES - Permission denied (mprotect failed)
-    // ENOMEM - Out of memory
+    // Common troubleshooting:
+    if (err == MK_ERRNO_HOOK_DLSYM) {
+        LOGE("Symbol not found — check library name and symbol spelling");
+    } else if (err == MK_ERRNO_UNINIT) {
+        LOGE("ShadowHook not initialized — call memkit_hook_init() first");
+    } else if (err == MK_ERRNO_INVALID_ARG) {
+        LOGE("Invalid argument — check function pointers and addresses");
+    }
 }
 ```
 
-### ShadowHook Error Codes
+### ShadowHook Error Codes (Legacy)
+
+For compatibility, you can still use ShadowHook's native error functions:
 
 ```c
 if (stub == NULL) {
@@ -344,12 +854,6 @@ if (stub == NULL) {
     LOGE("ShadowHook error: %d - %s", err, msg);
 }
 ```
-
-Common ShadowHook errors:
-- `SHADOWHOOK_ERRNO_HOOK_DLSYM` - Symbol not found
-- `SHADOWHOOK_ERRNO_HOOK_ENTER` - Failed to enter hook
-- `SHADOWHOOK_ERRNO_INVALID_ARG` - Invalid argument
-- `SHADOWHOOK_ERRNO_UNINIT` - Not initialized
 
 ---
 
