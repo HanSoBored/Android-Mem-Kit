@@ -65,7 +65,7 @@ INCLUDES = -Iinclude \
 
 LDFLAGS = -shared -llog -landroid
 
-MEMKIT_SRCS = src/memory.c src/hooking.c src/il2cpp.c src/xdl_wrapper.c
+MEMKIT_SRCS = src/memory.c src/hooking.c src/hooking_flags.c src/intercept.c src/records.c src/runtime_config.c src/dl_callbacks.c src/il2cpp.c src/xdl_wrapper.c
 SH_DIR = deps/shadowhook/shadowhook/src/main/cpp
 SH_SRCS = $(SH_DIR)/arch/$(SH_ARCH)/sh_inst.c \
           $(SH_DIR)/arch/$(SH_ARCH)/sh_glue.S \

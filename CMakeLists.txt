@@ -144,6 +144,11 @@ endif()
 add_library(memkit SHARED
     src/memory.c
     src/hooking.c
+    src/hooking_flags.c
+    src/intercept.c
+    src/records.c
+    src/runtime_config.c
+    src/dl_callbacks.c
     src/il2cpp.c
     src/xdl_wrapper.c
 )
