@@ -18,7 +18,7 @@ int memkit_hook_init(int mode, bool debuggable) {
     
     // Propagate error to errno for consistent error handling
     if (ret != 0) {
-        errno = -ret;  // ShadowHook returns negative error codes
+        errno = ret;  // ShadowHook returns positive error codes
     }
     
     return ret;
@@ -106,4 +106,48 @@ void* memkit_hook_by_symbol(const char* lib_name, const char* symbol_name, void*
     }
 
     return stub;
+}
+
+// ============================================================================
+// HOOKING: ERROR HANDLING
+// ============================================================================
+
+int memkit_errno(void) {
+    return shadowhook_get_errno();
+}
+
+const char *memkit_strerror(int errno_code) {
+    return shadowhook_to_errmsg(errno_code);
+}
+
+const char *memkit_version(void) {
+    return shadowhook_get_version();
+}
+
+int memkit_init_errno(void) {
+    return shadowhook_get_init_errno();
+}
+
+// ============================================================================
+// HOOKING: WITH CALLBACK
+// ============================================================================
+
+void *memkit_hook_with_callback(const char *lib_name, const char *sym_name, void *new_addr, void **orig_addr, MemKitHooked hooked, void *hooked_arg) {
+    if (!lib_name || !sym_name || !new_addr) return NULL;
+
+    void *stub = shadowhook_hook_sym_name_callback(
+        lib_name,
+        sym_name,
+        new_addr,
+        orig_addr,
+        (shadowhook_hooked_t)hooked,
+        hooked_arg
+    );
+
+    if (!stub && orig_addr) *orig_addr = NULL;
+    return stub;
+}
+
+void *memkit_hook_by_symbol_callback(const char *lib_name, const char *sym_name, void *new_addr, void **orig_addr, MemKitHooked hooked, void *hooked_arg) {
+    return memkit_hook_with_callback(lib_name, sym_name, new_addr, orig_addr, hooked, hooked_arg);
 }
