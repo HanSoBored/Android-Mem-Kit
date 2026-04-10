@@ -181,9 +181,9 @@ void init() {
 
 | Macro | Description |
 |-------|-------------|
-| `MK_IS_SHARED_MODE` | Evaluates to true if in SHARED mode |
-| `MK_IS_UNIQUE_MODE` | Evaluates to true if in UNIQUE mode |
-| `MK_IS_MULTI_MODE` | Evaluates to true if in MULTI mode |
+| `MEMKIT_IS_SHARED_MODE` | Evaluates to true if in SHARED mode |
+| `MEMKIT_IS_UNIQUE_MODE` | Evaluates to true if in UNIQUE mode |
+| `MEMKIT_IS_MULTI_MODE` | Evaluates to true if in MULTI mode |
 
 #### DL Callbacks
 
@@ -632,9 +632,9 @@ Control MemKit behavior at runtime:
 ```c
 // Check current mode
 int mode = memkit_get_mode();
-if (MK_IS_UNIQUE_MODE) {
+if (MEMKIT_IS_UNIQUE_MODE) {
     LOGI("Running in UNIQUE mode");
-} else if (MK_IS_SHARED_MODE) {
+} else if (MEMKIT_IS_SHARED_MODE) {
     LOGI("Running in SHARED mode");
 }
 

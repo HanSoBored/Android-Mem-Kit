@@ -475,9 +475,8 @@ int memkit_init_errno(void);
 // HOOKING: MODE CONSTANTS
 // ============================================================================
 
-#define MK_MODE_SHARED    0
-#define MK_MODE_UNIQUE    1
-#define MK_MODE_MULTI     2
+// Mode constants are provided by ShadowHook (SHADOWHOOK_MODE_SHARED, etc.)
+// Use MEMKIT_IS_SHARED_MODE, MEMKIT_IS_UNIQUE_MODE, MEMKIT_IS_MULTI_MODE macros above.
 
 // ============================================================================
 // HOOKING: CPU CONTEXT & INTERCEPT TYPES
@@ -676,9 +675,10 @@ void memkit_dump_records_fd(int fd, uint32_t item_flags);
 // RUNTIME CONFIGURATION
 // ============================================================================
 
-#define MK_IS_SHARED_MODE (MK_MODE_SHARED == memkit_get_mode())
-#define MK_IS_UNIQUE_MODE (MK_MODE_UNIQUE == memkit_get_mode())
-#define MK_IS_MULTI_MODE  (MK_MODE_MULTI  == memkit_get_mode())
+/* Convenience mode check macros (evaluates to true/false at runtime) */
+#define MEMKIT_IS_SHARED_MODE (SHADOWHOOK_MODE_SHARED == memkit_get_mode())
+#define MEMKIT_IS_UNIQUE_MODE (SHADOWHOOK_MODE_UNIQUE == memkit_get_mode())
+#define MEMKIT_IS_MULTI_MODE  (SHADOWHOOK_MODE_MULTI == memkit_get_mode())
 
 int memkit_get_mode(void);
 void memkit_set_debuggable(bool debuggable);
@@ -713,6 +713,32 @@ void *memkit_hook_by_symbol_callback(const char *lib_name, const char *sym_name,
 
 #ifdef __cplusplus
 }
+
+// ============================================================================
+// C++ STACK SCOPE RAII HELPER
+// ============================================================================
+
+/**
+ * RAII helper for automatic stack cleanup in proxy functions.
+ * Ensures memkit_pop_stack() is called when the scope exits.
+ *
+ * Usage:
+ *   void* my_proxy(int arg1, const char* arg2) {
+ *       MEMKIT_STACK_SCOPE();
+ *       // ... proxy logic ...
+ *       return original_fn(arg1, arg2);
+ *   }
+ */
+class MemKitStackScope {
+ public:
+  MemKitStackScope(void *return_address) : return_address_(return_address) {}
+  ~MemKitStackScope() {
+    memkit_pop_stack(return_address_);
+  }
+ private:
+  void *return_address_;
+};
+#define MEMKIT_STACK_SCOPE() MemKitStackScope memkit_stack_scope_obj(__builtin_return_address(0))
 #endif
 
 #endif // MEMKIT_H
