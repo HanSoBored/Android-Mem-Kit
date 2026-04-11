@@ -73,6 +73,10 @@ make ANDROID_ABI=armeabi-v7a
 
 # Clean build
 make clean && make
+
+# Custom build with CMake (for subproject use)
+cmake -B build -DMEMKIT_BUILD_SHARED=OFF -DCMAKE_TOOLCHAIN_FILE=...
+cmake --build build
 ```
 
 ### 4. Basic Usage
@@ -133,6 +137,7 @@ Android-Mem-Kit/
 │   ├── runtime_config.c    # Runtime configuration
 │   ├── dl_callbacks.c      # DL init/fini callbacks
 │   ├── il2cpp.c            # IL2CPP symbol resolution
+│   ├── il2cpp_safe.c       # IL2CPP safe call helpers (sigsetjmp/siglongjmp)
 │   └── xdl_wrapper.c       # xDL wrapper layer
 ├── examples/
 │   └── main.c              # Complete usage example

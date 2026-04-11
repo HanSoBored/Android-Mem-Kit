@@ -78,6 +78,7 @@ void init() {
 |----------|-------------|---------|
 | `memkit_hook_init(mode, debuggable)` | Initialize ShadowHook | `int` (0 = success) |
 | `memkit_hook(addr, replace, &orig)` | Hook function by address | `stub` or NULL |
+| `memkit_hook_sym_addr(sym_addr, new_addr, &orig)` | Hook by already-resolved symbol address | `stub` or NULL |
 | `memkit_hook_by_symbol(lib, sym, func, &orig)` | Hook by symbol name | `stub` or NULL |
 | `memkit_unhook(stub)` | Unhook function | `void` |
 
@@ -87,6 +88,9 @@ void init() {
 |----------|-------------|---------|
 | `memkit_hook_v2(lib, sym, new, &orig, flags)` | Hook with mode flags | `stub` or NULL |
 | `memkit_hook_by_symbol_v2(lib, sym, new, &orig, flags)` | Hook by symbol with flags | `stub` or NULL |
+| `memkit_hook_func_addr_2(addr, new, &orig, flags, ...)` | Hook by function address with flags (variadic for RECORD mode) | `stub` or NULL |
+| `memkit_hook_sym_addr_2(sym_addr, new, &orig, flags, ...)` | Hook by symbol address with flags (variadic for RECORD mode) | `stub` or NULL |
+| `memkit_hook_sym_name_callback_2(lib, sym, new, &orig, cb, arg)` | Hook by symbol name with completion callback | `stub` or NULL |
 
 **V2 Hook Flags:**
 
@@ -232,6 +236,50 @@ void init() {
 | `memkit_il2cpp_get_handle()` | Get cached handle | `void*` or NULL |
 | `IL2CPP_CALL(ret, name, ...)` | Macro for auto-cached calls | Function pointer |
 
+### IL2CPP Helper Functions
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_il2cpp_get_image(assembly_name)` | Get the `Il2CppImage*` for a named assembly | `void*` or NULL |
+| `memkit_il2cpp_safe_call(fn, arg, &out_result)` | Safely call an IL2CPP runtime API with crash protection (sigsetjmp/siglongjmp) | `bool` |
+| `memkit_il2cpp_wait_ready(timeout_ms)` | Wait until the IL2CPP runtime is ready (polls `il2cpp_domain_get` with timeout) | `void*` (domain) or NULL |
+| `memkit_il2cpp_attach_thread(domain)` | Attach current thread to IL2CPP domain | `void*` (thread) or NULL |
+| `memkit_il2cpp_detach_thread(thread)` | Detach current thread from IL2CPP domain | `void` |
+
+**Usage Example — Full IL2CPP Instrumentation Pattern:**
+
+```c
+// 1. Wait for runtime
+void* domain = memkit_il2cpp_wait_ready(5000);
+if (!domain) {
+    LOGE("IL2CPP runtime not ready (timeout)");
+    return;
+}
+
+// 2. Attach thread
+void* thread = memkit_il2cpp_attach_thread(domain);
+if (!thread) {
+    LOGE("Failed to attach thread");
+    return;
+}
+
+// 3. Get image for assembly
+void* image = memkit_il2cpp_get_image("Assembly-CSharp");
+if (!image) {
+    LOGE("Assembly-CSharp image not found");
+}
+
+// 4. Safe call to IL2CPP API (with crash protection)
+void* result;
+bool ok = memkit_il2cpp_safe_call(some_il2cpp_fn, arg, &result);
+if (!ok) {
+    LOGE("IL2CPP call crashed or failed");
+}
+
+// 5. Detach when done
+memkit_il2cpp_detach_thread(thread);
+```
+
 ### XDL Wrapper Functions
 
 #### Library Discovery
@@ -367,6 +415,23 @@ hook_stub = memkit_hook(
     (void*)my_function,
     (void**)&orig_function
 );
+```
+
+### Hook by Symbol Address
+
+Use `memkit_hook_sym_addr()` when you already have the function pointer resolved from XDL or other methods:
+
+```c
+// Resolve symbol first (e.g., via XDL wrapper)
+void* sym_addr = memkit_xdl_sym(handle, "target_function", NULL);
+
+if (sym_addr) {
+    hook_stub = memkit_hook_sym_addr(
+        sym_addr,
+        (void*)my_function,
+        (void**)&orig_function
+    );
+}
 ```
 
 ### Unhook

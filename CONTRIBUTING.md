@@ -79,7 +79,7 @@ Improvements to documentation are always welcome:
 # Android NDK (r25b or newer)
 export ANDROID_NDK_HOME=/path/to/android-ndk
 
-# CMake 3.10+
+# CMake 3.14+
 cmake --version
 
 # Git
@@ -94,7 +94,7 @@ git clone https://github.com/HanSoBored/Android-Mem-Kit.git
 cd Android-Mem-Kit
 
 # Setup dependencies
-./setup.sh
+git submodule update --init --recursive
 
 # Build
 mkdir build && cd build
@@ -103,6 +103,17 @@ cmake .. \
     -DANDROID_ABI=arm64-v8a \
     -DANDROID_PLATFORM=android-35
 cmake --build .
+```
+
+### Build with Makefile (Simpler)
+
+For a quicker build without CMake configuration:
+
+```bash
+# Simple build (uses Makefile)
+make
+make ANDROID_ABI=armeabi-v7a
+make clean
 ```
 
 ### Testing
@@ -153,6 +164,8 @@ How was this tested?
 ## Coding Standards
 
 ### C Style
+
+**Note:** This project uses **C23**. Contributors should be aware of C23 features such as `nullptr`, `[[nodiscard]]`, and `typeof_unqual`. Avoid using these features in ways that break compatibility with older compilers if possible.
 
 ```c
 // Function naming: snake_case
@@ -213,6 +226,15 @@ free(outer_ptr);
 // NULL after free (optional but recommended)
 free(ptr);
 ptr = NULL;
+```
+
+### Subproject Builds
+
+When using MemKit as a CMake subproject (`add_subdirectory`), set `MEMKIT_BUILD_SHARED=OFF` to build a static library. This is the default for subproject builds:
+
+```cmake
+set(MEMKIT_BUILD_SHARED OFF)
+add_subdirectory(path/to/Android-Mem-Kit)
 ```
 
 ---

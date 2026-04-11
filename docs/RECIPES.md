@@ -12,6 +12,7 @@ A collection of common patterns and use cases for security research.
 4. [Root Detection Bypass](#root-detection-bypass)
 5. [Crypto Analysis](#crypto-analysis)
 6. [Anti-Debugging Bypass](#anti-debugging-bypass)
+7. [IL2CPP Runtime Instrumentation](#il2cpp-runtime-instrumentation)
 
 ---
 
@@ -478,6 +479,110 @@ void cleanup_research_tools() {
 3. **Use UNIQUE mode** unless you need multiple hooks on same function
 4. **Free resources** when done to prevent memory leaks
 5. **Document your findings** for future reference
+
+---
+
+## IL2CPP Runtime Instrumentation
+
+### IL2CPP Safe Instrumentation Pattern
+
+When instrumenting Unity/IL2CPP applications, you need to wait for the runtime to initialize, attach your thread, and use safe calls to avoid crashes:
+
+```c
+#include "memkit.h"
+#include <android/log.h>
+
+#define LOG_TAG "IL2CPP-Research"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+void il2cpp_instrumentation() {
+    // Step 1: Wait for IL2CPP runtime to be ready (5 second timeout)
+    void* domain = memkit_il2cpp_wait_ready(5000);
+    if (!domain) {
+        LOGE("IL2CPP runtime not ready — timeout");
+        return;
+    }
+    LOGI("IL2CPP domain acquired: %p", domain);
+
+    // Step 2: Attach current thread to IL2CPP domain
+    void* thread = memkit_il2cpp_attach_thread(domain);
+    if (!thread) {
+        LOGE("Failed to attach thread to IL2CPP domain");
+        return;
+    }
+    LOGI("Thread attached: %p", thread);
+
+    // Step 3: Get image for target assembly
+    void* image = memkit_il2cpp_get_image("Assembly-CSharp");
+    if (!image) {
+        LOGE("Assembly-CSharp image not found");
+        goto cleanup;
+    }
+    LOGI("Found Assembly-CSharp image: %p", image);
+
+    // Step 4: Use safe calls for IL2CPP APIs (crash-protected)
+    // Example: Get all classes from a namespace
+    void* (*il2cpp_class_get_classes)(void*, void**) =
+        IL2CPP_CALL(void*, "il2cpp_class_get_classes", void*, void**);
+
+    if (il2cpp_class_get_classes) {
+        void* result;
+        bool ok = memkit_il2cpp_safe_call(
+            (void* (*)(void*))il2cpp_class_get_classes,
+            image,
+            &result
+        );
+        if (ok) {
+            LOGI("Safe call succeeded — result: %p", result);
+        } else {
+            LOGE("Safe call failed or crashed");
+        }
+    }
+
+cleanup:
+    // Step 5: Detach thread when done
+    memkit_il2cpp_detach_thread(thread);
+    LOGI("Thread detached");
+}
+
+// Call from constructor or initialization
+__attribute__((constructor))
+void init() {
+    memkit_hook_init(SHADOWHOOK_MODE_UNIQUE, false);
+    il2cpp_instrumentation();
+}
+```
+
+### Hook IL2CPP Functions with Safe Call Wrapper
+
+For functions that may crash the runtime, wrap them in safe calls:
+
+```c
+// Resolve a function from libil2cpp.so
+void* (*il2cpp_class_get_name)(void*) =
+    IL2CPP_CALL(void*, "il2cpp_class_get_name", void*);
+
+// Safe wrapper
+const char* safe_class_name(void* klass) {
+    if (!klass || !il2cpp_class_get_name) return NULL;
+
+    void* result;
+    bool ok = memkit_il2cpp_safe_call(
+        (void* (*)(void*))il2cpp_class_get_name,
+        klass,
+        &result
+    );
+    return ok ? (const char*)result : NULL;
+}
+
+// Usage
+void* some_class = /* ... */;
+const char* name = safe_class_name(some_class);
+if (name) {
+    LOGI("Class name: %s", name);
+}
+```
 
 ---
 

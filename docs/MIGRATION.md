@@ -102,5 +102,6 @@ The C wrapper exposes significantly more of ShadowHook's API:
 | **Runtime Config** | `memkit_set_debuggable()`, `memkit_set_recordable()` | Toggle settings at runtime |
 | **V2 Hook API** | `memkit_hook_v2()` | Per-hook mode flags (override global mode) |
 | **DL Callbacks** | `memkit_register_dl_*_callback()` | Auto-detect library load/unload events |
+| **IL2CPP Helpers** | `memkit_il2cpp_get_image()`, `memkit_il2cpp_safe_call()`, `memkit_il2cpp_wait_ready()`, `memkit_il2cpp_attach_thread()`, `memkit_il2cpp_detach_thread()` | Runtime-safe IL2CPP instrumentation with crash protection |
 
 See [USAGE.md](USAGE.md) for full API reference.
