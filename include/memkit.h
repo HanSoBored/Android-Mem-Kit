@@ -139,6 +139,52 @@ void* memkit_il2cpp_resolve_symtab(const char* symbol_name);
  */
 void* memkit_il2cpp_get_handle(void);
 
+/**
+ * Get the Il2CppImage* for a named assembly.
+ * Handles the full chain: domain_get_assemblies → find by name → assembly_get_image.
+ * Falls back to image name matching if assembly_get_name is not exported.
+ *
+ * @param assembly_name Assembly name (e.g., "Assembly-CSharp")
+ * @return Il2CppImage* pointer, or NULL on failure.
+ */
+void* memkit_il2cpp_get_image(const char* assembly_name);
+
+/**
+ * Safely call an IL2CPP runtime API with crash protection.
+ * If the call crashes (SIGSEGV/SIGBUS), the function returns false instead
+ * of killing the process.
+ *
+ * @param fn Function pointer to call (takes one arg, returns pointer)
+ * @param arg Argument to pass to fn
+ * @param out_result Output: result pointer (set only if true returned)
+ * @return true if call succeeded, false if crashed or returned NULL.
+ */
+bool memkit_il2cpp_safe_call(void* (*fn)(void*), void* arg, void** out_result);
+
+/**
+ * Wait until the IL2CPP runtime is ready.
+ * Polls il2cpp_domain_get() until it returns non-NULL or timeout.
+ *
+ * @param timeout_ms Maximum time to wait in milliseconds
+ * @return Domain pointer, or NULL on timeout.
+ */
+void* memkit_il2cpp_wait_ready(int timeout_ms);
+
+/**
+ * Attach the current thread to the IL2CPP domain.
+ *
+ * @param domain IL2CPP domain pointer (use memkit_il2cpp_wait_ready or il2cpp_domain_get)
+ * @return Thread pointer, or NULL on failure.
+ */
+void* memkit_il2cpp_attach_thread(void* domain);
+
+/**
+ * Detach the current thread from the IL2CPP domain.
+ *
+ * @param thread Thread pointer from memkit_il2cpp_attach_thread
+ */
+void memkit_il2cpp_detach_thread(void* thread);
+
 // ============================================================================
 // XDL WRAPPER TYPES
 // ============================================================================

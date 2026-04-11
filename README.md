@@ -142,6 +142,31 @@ Android-Mem-Kit/
 
 ---
 
+## Known Issues
+
+### ShadowHook Error 12 on Android 15
+
+When using ShadowHook on **Android 15 (API 35)**, you may encounter **error code 12** (`MK_ERRNO_INIT_LINKER`) during `memkit_hook_init()`. This is caused by changes to Android's internal linker behavior in Android 15 that affect ShadowHook's hooking mechanism.
+
+**Affected versions:** ShadowHook < v1.0.10
+
+**Workaround:**
+- Pin ShadowHook to **v1.0.10 or later** which includes Android 15 compatibility fixes.
+- If using local dependencies, update the submodule:
+  ```bash
+  cd deps/shadowhook
+  git checkout v1.0.10  # or later
+  ```
+- If fetching via git (`USE_LOCAL_DEPS=OFF`), the CMakeLists.txt already fetches v1.3.0 which includes the fix.
+
+**Tracking:** See upstream issue [bytedance/android-inline-hook#91](https://github.com/bytedance/android-inline-hook/issues/91) for the latest status.
+
+### Subproject Builds
+
+When building memkit as a subproject (`add_subdirectory`), ensure you set `-DMEMKIT_BUILD_SHARED=OFF` to build a static library. The default is `OFF` for subprojects and `ON` for standalone builds.
+
+---
+
 ## Credits
 
 This project utilizes excellent open-source libraries:

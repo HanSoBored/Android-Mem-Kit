@@ -5,6 +5,17 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # ============================================================================
+# Subproject Detection
+# ============================================================================
+
+# Detect if memkit is being built as a subproject (via add_subdirectory)
+# When CMAKE_SOURCE_DIR != CMAKE_CURRENT_SOURCE_DIR, we are a subproject.
+set(MEMKIT_IS_SUBPROJECT OFF)
+if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(MEMKIT_IS_SUBPROJECT ON)
+endif()
+
+# ============================================================================
 # Android NDK Setup
 # ============================================================================
 
@@ -14,11 +25,24 @@ elseif(DEFINED ENV{NDK_HOME})
     set(ANDROID_NDK $ENV{NDK_HOME})
 endif()
 
-if(NOT ANDROID_NDK)
-    message(FATAL_ERROR "ANDROID_NDK_HOME or NDK_HOME environment variable must be set")
+# Toolchain detection helper: warn if NDK exists but no toolchain file set
+# (This is too late to set CMAKE_TOOLCHAIN_FILE in subproject context)
+if(NOT CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{ANDROID_NDK_HOME})
+    message(WARNING
+        "ANDROID_NDK_HOME is set but CMAKE_TOOLCHAIN_FILE is not. "
+        "If building for Android, ensure you pass "
+        "-DCMAKE_TOOLCHAIN_FILE=\$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake "
+        "to the top-level CMake invocation."
+    )
 endif()
 
-message(STATUS "Android NDK: ${ANDROID_NDK}")
+if(NOT ANDROID_NDK AND NOT CMAKE_TOOLCHAIN_FILE)
+    message(FATAL_ERROR "ANDROID_NDK_HOME or NDK_HOME environment variable must be set, or CMAKE_TOOLCHAIN_FILE must point to an Android toolchain file")
+endif()
+
+if(ANDROID_NDK)
+    message(STATUS "Android NDK: ${ANDROID_NDK}")
+endif()
 
 # ============================================================================
 # Compiler Flags
@@ -28,8 +52,16 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -fPIC")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -llog")
 
 # ============================================================================
-# Option: Use local dependencies or fetch from git
+# Build Options
 # ============================================================================
+
+# MEMKIT_BUILD_SHARED: When OFF (default for subprojects), build as STATIC library.
+# When ON (default for standalone), build as SHARED library.
+if(MEMKIT_IS_SUBPROJECT)
+    option(MEMKIT_BUILD_SHARED "Build memkit as a shared library" OFF)
+else()
+    option(MEMKIT_BUILD_SHARED "Build memkit as a shared library" ON)
+endif()
 
 option(USE_LOCAL_DEPS "Use local dependencies from deps/ folder" ON)
 
@@ -37,7 +69,7 @@ option(USE_LOCAL_DEPS "Use local dependencies from deps/ folder" ON)
 # Include Directories
 # ============================================================================
 
-include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # ============================================================================
 # Dependencies
@@ -47,7 +79,7 @@ if(USE_LOCAL_DEPS)
     # Use local dependencies (faster, offline builds)
 
     # XDL library
-    set(XDL_DIR ${CMAKE_SOURCE_DIR}/deps/xdl/xdl)
+    set(XDL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/xdl/xdl)
     if(EXISTS ${XDL_DIR})
         include_directories(${XDL_DIR}/src/main/cpp/include)
         file(GLOB XDL_SOURCES ${XDL_DIR}/src/main/cpp/*.c)
@@ -59,13 +91,25 @@ if(USE_LOCAL_DEPS)
     endif()
 
     # ShadowHook library
-    set(SHADOWHOOK_DIR ${CMAKE_SOURCE_DIR}/deps/shadowhook)
+    # NOTE: ShadowHook v1.0.10+ is recommended for Android 15 compatibility.
+    # See: https://github.com/bytedance/android-inline-hook/issues/91
+    set(SHADOWHOOK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/shadowhook)
     if(EXISTS ${SHADOWHOOK_DIR})
-        # For arm64-v8a target
+        # Architecture auto-detection with proper ANDROID_ABI handling
+        if(NOT ANDROID_ABI)
+            if(CMAKE_ANDROID_ARCH_ABI)
+                set(ANDROID_ABI ${CMAKE_ANDROID_ARCH_ABI})
+            else()
+                set(ANDROID_ABI "arm64-v8a")
+            endif()
+        endif()
+
         if(ANDROID_ABI STREQUAL "arm64-v8a")
             set(SH_ARCH_DIR "arm64")
-        else()
+        elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
             set(SH_ARCH_DIR "arm")
+        else()
+            message(FATAL_ERROR "Unsupported Android ABI: ${ANDROID_ABI}")
         endif()
 
         include_directories(
@@ -127,6 +171,7 @@ else()
     )
 
     # ShadowHook
+    # NOTE: v1.0.10+ recommended for Android 15 compatibility
     FetchContent_Declare(
         shadowhook
         GIT_REPOSITORY https://github.com/bytedance/android-inline-hook.git
@@ -141,7 +186,14 @@ endif()
 # Main memkit Library
 # ============================================================================
 
-add_library(memkit SHARED
+# Determine library type based on MEMKIT_BUILD_SHARED option
+if(MEMKIT_BUILD_SHARED)
+    set(LIB_TYPE SHARED)
+else()
+    set(LIB_TYPE STATIC)
+endif()
+
+add_library(memkit ${LIB_TYPE}
     src/memory.c
     src/hooking.c
     src/hooking_flags.c
@@ -150,11 +202,19 @@ add_library(memkit SHARED
     src/runtime_config.c
     src/dl_callbacks.c
     src/il2cpp.c
+    src/il2cpp_safe.c
     src/xdl_wrapper.c
 )
 
+# Set library type based on MEMKIT_BUILD_SHARED option
+if(MEMKIT_BUILD_SHARED)
+    set_target_properties(memkit PROPERTIES LINKER_LANGUAGE C)
+else()
+    set_target_properties(memkit PROPERTIES LINKER_LANGUAGE C)
+endif()
+
 target_include_directories(memkit PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${XDL_DIR}/include
     ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/include
 )
@@ -167,7 +227,8 @@ target_link_libraries(memkit
 )
 
 set_target_properties(memkit PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib"
 )
 
 # ============================================================================
@@ -182,7 +243,7 @@ if(BUILD_EXAMPLES)
     )
     target_link_libraries(memkit-example memkit)
     set_target_properties(memkit-example PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/example"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/example"
     )
     message(STATUS "Building examples")
 endif()
@@ -193,6 +254,7 @@ endif()
 
 install(TARGETS memkit
     LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
 )
 
 install(FILES include/memkit.h
@@ -205,5 +267,7 @@ install(FILES include/memkit.h
 
 message(STATUS "")
 message(STATUS "  Android NDK: ${ANDROID_NDK}")
+message(STATUS "  Subproject:  ${MEMKIT_IS_SUBPROJECT}")
+message(STATUS "  Shared lib:  ${MEMKIT_BUILD_SHARED}")
 message(STATUS "  Local deps:  ${USE_LOCAL_DEPS}")
 message(STATUS "  Examples:    ${BUILD_EXAMPLES}")
