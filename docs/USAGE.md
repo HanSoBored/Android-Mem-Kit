@@ -226,6 +226,29 @@ void init() {
 | `memkit_disallow_reentrant(return_addr)` | Disallow reentrancy | `void` |
 | `memkit_get_return_address()` | Get caller return address | `void*` |
 
+#### C++ RAII Stack Scope (C++ only)
+
+For C++ code, `MEMKIT_STACK_SCOPE()` provides automatic stack cleanup via RAII. This is safer than manual `MEMKIT_POP_STACK()` when your proxy has multiple return paths or may throw exceptions:
+
+```cpp
+void* my_proxy(int arg1, const char* arg2) {
+    MEMKIT_STACK_SCOPE();  // Automatically calls memkit_pop_stack() on scope exit
+    
+    if (!arg1) {
+        return NULL;  // Early return — stack still popped automatically
+    }
+    
+    void* result = original_fn(arg1, arg2);
+    return result;  // Normal return — stack popped by destructor
+}
+```
+
+**When to use:** 
+- ✅ C++ proxy functions with multiple return paths
+- ✅ Code that may throw exceptions
+- ✅ Complex logic where manual `MEMKIT_POP_STACK()` is error-prone
+- ❌ C code — use manual `MEMKIT_POP_STACK()` instead (RAII is C++ only)
+
 ### IL2CPP Functions
 
 | Function | Description | Returns |
@@ -319,6 +342,41 @@ memkit_il2cpp_detach_thread(thread);
 |-------|-------------|
 | `XDL_RESOLVE(lib, sym)` | One-shot symbol resolve |
 | `XDL_RESOLVE_SIZE(lib, sym, &size)` | Resolve with size output |
+
+### DL Helpers (ShadowHook's Internal Loader)
+
+These functions wrap ShadowHook's internal `dlopen`/`dlsym` and work even when standard `dlopen` is restricted by Android's linker namespace.
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_dlopen(lib_name)` | Open library handle (ShadowHook's loader) | `void*` or NULL |
+| `memkit_dlclose(handle)` | Close library handle | `void` |
+| `memkit_dlsym(handle, sym)` | Resolve symbol (tries .dynsym then .symtab) | `void*` or NULL |
+| `memkit_dlsym_dynsym(handle, sym)` | Resolve from .dynsym only (faster) | `void*` or NULL |
+| `memkit_dlsym_symtab(handle, sym)` | Resolve from .symtab only (debug/stripped, slower) | `void*` or NULL |
+
+**When to use:** Prefer these over standard `dlopen`/`dlsym` when working with Android's restricted linker namespace, especially on Android 7+.
+
+```c
+// Basic usage
+void* handle = memkit_dlopen("libtarget.so");
+if (handle) {
+    void* sym = memkit_dlsym(handle, "target_function");
+    if (sym) {
+        LOGI("Found target_function at %p", sym);
+    }
+    memkit_dlclose(handle);
+}
+
+// Selective resolution (faster if you know where the symbol is)
+void* dynsym_sym = memkit_dlsym_dynsym(handle, "public_api");    // .dynsym
+void* symtab_sym = memkit_dlsym_symtab(handle, "internal_func"); // .symtab
+```
+
+**Difference from XDL wrapper:**
+- `memkit_dlopen` uses ShadowHook's internal loader (better linker bypass)
+- `memkit_xdl_open` uses XDL library (more portable, standard discovery)
+- Both work for most use cases; prefer `memkit_dlopen` for hooking targets
 
 ---
 
@@ -908,17 +966,20 @@ if (stub == NULL) {
 }
 ```
 
-### ShadowHook Error Codes (Legacy)
+### Direct ShadowHook Access (Edge Cases)
 
-For compatibility, you can still use ShadowHook's native error functions:
+For edge cases where you need direct access to ShadowHook's native error functions:
 
 ```c
+// Direct ShadowHook access (rarely needed — prefer memkit_errno/memkit_strerror)
 if (stub == NULL) {
     int err = shadowhook_get_errno();
     const char* msg = shadowhook_to_errmsg(err);
     LOGE("ShadowHook error: %d - %s", err, msg);
 }
 ```
+
+**Note:** In almost all cases, prefer `memkit_errno()` and `memkit_strerror()` — they wrap the same underlying ShadowHook error state but keep your code decoupled from the hooking library.
 
 ---
 

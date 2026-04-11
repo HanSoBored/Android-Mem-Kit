@@ -165,8 +165,8 @@ static void* research_thread(void* arg) {
     // -------------------------------------------------------------------------
     int hook_init_result = memkit_hook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (hook_init_result != 0) {
-        int err = shadowhook_get_errno();
-        const char* msg = shadowhook_to_errmsg(err);
+        int err = memkit_errno();
+        const char* msg = memkit_strerror(err);
         LOGE("Failed to initialize ShadowHook: %d - %s", err, msg);
         return NULL;
     }
@@ -187,7 +187,7 @@ static void* research_thread(void* arg) {
     if (ssl_verify_stub) {
         LOGI("SSL verification hook installed (for analysis)");
     } else {
-        int err = shadowhook_get_errno();
+        int err = memkit_errno();
         LOGD("SSL hook not installed (app may not use libssl.so): %d", err);
     }
 
@@ -206,7 +206,7 @@ static void* research_thread(void* arg) {
     if (signature_stub) {
         LOGI("Signature verification hook installed (for analysis)");
     } else {
-        int err = shadowhook_get_errno();
+        int err = memkit_errno();
         LOGD("Signature hook not installed (symbol may not exist): %d", err);
     }
 

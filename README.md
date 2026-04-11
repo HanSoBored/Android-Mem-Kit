@@ -51,7 +51,8 @@ This library is intended for:
 ### 1. Prerequisites
 
 ```bash
-export ANDROID_NDK_HOME=/path/to/your/android-ndk-r29
+# NDK r25b or newer required
+export ANDROID_NDK_HOME=/path/to/your/android-ndk
 ```
 
 ### 2. Clone & Setup
@@ -127,7 +128,7 @@ void init() {
 ```
 Android-Mem-Kit/
 ├── include/
-│   └── memkit.h            # Public API header (~500 lines)
+│   └── memkit.h            # Public API header (~790 lines)
 ├── src/
 │   ├── memory.c            # Memory patching (mprotect-based)
 │   ├── hooking.c           # Basic hook/unhook + error handling

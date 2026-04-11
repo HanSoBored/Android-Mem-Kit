@@ -12,7 +12,8 @@ A collection of common patterns and use cases for security research.
 4. [Root Detection Bypass](#root-detection-bypass)
 5. [Crypto Analysis](#crypto-analysis)
 6. [Anti-Debugging Bypass](#anti-debugging-bypass)
-7. [IL2CPP Runtime Instrumentation](#il2cpp-runtime-instrumentation)
+7. [Intercept API Patterns](#intercept-api-patterns)
+8. [IL2CPP Runtime Instrumentation](#il2cpp-runtime-instrumentation)
 
 ---
 
@@ -413,6 +414,194 @@ static int my_clock_gettime(clockid_t clock_id, struct timespec* tp) {
     return ret;
 }
 ```
+
+---
+
+## Intercept API Patterns
+
+The Intercept API lets you inspect and modify CPU registers **before** the target function executes. Unlike hooks that replace the entire function, interceptors receive the full CPU context and can modify arguments in-place.
+
+### 1. Argument Inspection and Modification
+
+```c
+// Intercept a function and modify its first argument before execution
+static void intercept_modify_arg(MemKitCpuContext* ctx, void* data) {
+    // ARM64: x0 holds the first argument
+    uint64_t original_arg0 = ctx->regs[0];
+    LOGI("Intercepted! Original arg0: 0x%lx", original_arg0);
+
+    // Modify the first argument before the target sees it
+    ctx->regs[0] = 0xDEADBEEF;
+}
+
+void* stub = memkit_intercept_by_symbol(
+    "libtarget.so",
+    "target_function",
+    intercept_modify_arg,
+    NULL,
+    MK_INTERCEPT_DEFAULT
+);
+```
+
+### 2. String Argument Interception
+
+```c
+// Intercept a function that takes a string argument and modify it
+static void intercept_string_arg(MemKitCpuContext* ctx, void* data) {
+    // x0 points to the string argument
+    const char* original = (const char*)ctx->regs[0];
+    LOGI("String arg: %s", original ? original : "(null)");
+
+    // Replace with a different string (must be valid for the duration of the call)
+    static const char* replacement = "/safe/path";
+    ctx->regs[0] = (uint64_t)replacement;
+}
+
+void* stub = memkit_intercept_by_symbol(
+    "libtarget.so",
+    "open_file",
+    intercept_string_arg,
+    NULL,
+    MK_INTERCEPT_DEFAULT
+);
+```
+
+### 3. Intercept with Multiple Arguments
+
+```c
+// Intercept a function with multiple arguments and log them all
+static void intercept_multi_args(MemKitCpuContext* ctx, void* data) {
+    // ARM64 calling convention: x0-x7 hold first 8 integer/pointer args
+    uint64_t arg0 = ctx->regs[0];
+    uint64_t arg1 = ctx->regs[1];
+    uint64_t arg2 = ctx->regs[2];
+    uint64_t arg3 = ctx->regs[3];
+
+    LOGI("Intercepted: arg0=0x%lx, arg1=0x%lx, arg2=0x%lx, arg3=0x%lx",
+         arg0, arg1, arg2, arg3);
+
+    // Selectively modify arguments
+    if (arg1 == 0x1234) {
+        ctx->regs[1] = 0x5678;  // Change arg1 conditionally
+    }
+}
+
+void* stub = memkit_intercept_by_symbol(
+    "libtarget.so",
+    "complex_function",
+    intercept_multi_args,
+    NULL,
+    MK_INTERCEPT_DEFAULT
+);
+```
+
+### 4. Intercept with FP/SIMD Context (NEON)
+
+```c
+// Intercept a function that uses NEON/FP registers
+static void intercept_simd(MemKitCpuContext* ctx, void* data) {
+    // Access VFP/NEON registers when using MK_INTERCEPT_WITH_FPSIMD_*
+    LOGI("V0: %llu", ctx->vregs[0].d[0]);
+    LOGI("V1: %llu", ctx->vregs[1].d[0]);
+
+    // Modify a SIMD register if needed
+    ctx->vregs[0].d[0] = 0x0000000000000000ULL;
+}
+
+void* stub = memkit_intercept_by_symbol(
+    "libtarget.so",
+    "simd_heavy_function",
+    intercept_simd,
+    NULL,
+    MK_INTERCEPT_WITH_FPSIMD_READ_WRITE  // Required for NEON register access
+);
+```
+
+### 5. Intercept with Recording Enabled
+
+```c
+// Enable recording for this specific intercept operation
+static void intercept_logged(MemKitCpuContext* ctx, void* data) {
+    LOGI("Intercepted with recording enabled");
+}
+
+void* stub = memkit_intercept_by_symbol(
+    "libtarget.so",
+    "sensitive_function",
+    intercept_logged,
+    NULL,
+    MK_INTERCEPT_DEFAULT | MK_INTERCEPT_RECORD  // Log this intercept
+);
+```
+
+### 6. Intercept at Specific Instruction Offset
+
+```c
+// Intercept at a specific instruction address (not function entry)
+static void intercept_at_offset(MemKitCpuContext* ctx, void* data) {
+    LOGI("Hit specific instruction offset!");
+}
+
+uintptr_t base = memkit_get_lib_base("libtarget.so");
+void* target_instr = (void*)(base + 0x1234);  // Specific instruction
+
+void* stub = memkit_intercept_at_instr(
+    target_instr,
+    intercept_at_offset,
+    NULL,
+    MK_INTERCEPT_DEFAULT
+);
+```
+
+### 7. Intercept with Completion Callback
+
+```c
+// Get notified when intercept is installed
+void on_intercept_complete(int error_number, const char* lib_name,
+                           const char* sym_name, void* sym_addr,
+                           void* pre, void* data, void* arg) {
+    if (error_number == 0) {
+        LOGI("Intercept installed: %s!%s", lib_name, sym_name);
+    } else {
+        LOGE("Intercept failed: %d", error_number);
+    }
+}
+
+void* stub = memkit_intercept_with_callback(
+    "libtarget.so",
+    "target_function",
+    my_interceptor,
+    NULL,
+    MK_INTERCEPT_DEFAULT,
+    on_intercept_complete,
+    NULL
+);
+```
+
+### 8. Remove Interceptor
+
+```c
+// When done, remove the interceptor to restore normal behavior
+if (stub) {
+    int ret = memkit_unintercept(stub);
+    if (ret == 0) {
+        LOGI("Interceptor removed successfully");
+    } else {
+        LOGE("Interceptor removal failed: %d", memkit_errno());
+    }
+}
+```
+
+### Intercept vs Hook: When to Use Which
+
+| Scenario | Use | Why |
+|----------|-----|-----|
+| Replace function entirely | **Hook** (`memkit_hook_*`) | Full control, can call original |
+| Inspect/modify arguments before call | **Intercept** (`memkit_intercept_*`) | Pre-call CPU context access |
+| Log function calls without changing behavior | **Intercept** | Lightweight, no trampoline needed |
+| Return value modification | **Hook** | Post-call access via return value |
+| NEON/FP register inspection | **Intercept** (with `MK_INTERCEPT_WITH_FPSIMD_*`) | Direct register access |
+| Specific instruction targeting | **Intercept** (`memkit_intercept_at_instr`) | Not limited to function entry |
 
 ---
 
