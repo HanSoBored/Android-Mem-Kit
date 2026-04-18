@@ -6,6 +6,11 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/types.h>
+
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 #include "memkit.h"
 

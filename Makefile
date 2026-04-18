@@ -52,7 +52,11 @@ endef
 # Flags & Sources
 # ============================================================================
 
-CFLAGS = -Wall -Wextra -fPIC -O2 -std=c23 -Wno-macro-redefined
+CFLAGS = -std=c23 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wdouble-promotion \
+         -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wold-style-definition \
+         -Wmissing-prototypes -Wimplicit-fallthrough -Wvla \
+         -Werror=implicit-function-declaration -Werror=int-conversion \
+         -fPIC -O2 -Wno-macro-redefined -fdiagnostics-format=clang
 INCLUDES = -Iinclude \
            -Ideps/xdl/xdl/src/main/cpp/include \
            -Ideps/shadowhook/shadowhook/src/main/cpp/include \
@@ -118,7 +122,7 @@ endef
 # Targets
 # ============================================================================
 
-.PHONY: all clean setup directories banner help test test-clean
+.PHONY: all clean setup directories banner help test test-clean analyze cppcheck sanitize-asan sanitize-ubsan
 
 all: banner directories $(LIB_DIR)/libmemkit.so
 
@@ -129,6 +133,11 @@ help:
 	@echo "  all          Default target, builds the shared library"
 	@echo "  clean        Remove build directory"
 	@echo "  setup        Initialize/Update git submodules"
+	@echo "  analyze      Run Clang Static Analyzer"
+	@echo "  cppcheck     Run Cppcheck static analysis"
+	@echo "  sanitize-asan Build with AddressSanitizer"
+	@echo "  sanitize-ubsan Build with UndefinedBehaviorSanitizer"
+	@echo "  test         Build and run unit tests"
 	@echo "  help         Show this help message"
 	@echo ""
 	@echo "$(YELLOW)Variables:$(RESET)"
@@ -139,6 +148,9 @@ help:
 	@echo "$(YELLOW)Examples:$(RESET)"
 	@echo "  make ANDROID_ABI=armeabi-v7a"
 	@echo "  make ANDROID_PLATFORM=android-30"
+	@echo "  make analyze"
+	@echo "  make cppcheck"
+	@echo "  make sanitize-asan"
 	@echo ""
 
 banner:
@@ -218,3 +230,31 @@ $(OBJ_DIR)/tests/%.o: tests/%.c
 test-clean:
 	@echo "$(WHITE)Cleaning test binaries...$(RESET)"
 	@rm -f $(TEST_BIN)
+
+# ============================================================================
+# Static Analysis
+# ============================================================================
+
+analyze: banner
+	@echo "$(WHITE)Running Clang Static Analyzer...$(RESET)"
+	@scan-build -o build/analyze-report $(CC) $(CFLAGS) $(INCLUDES) $(MEMKIT_SRCS) || true
+	@echo "$(GREEN)Static analysis complete. Check build/analyze-report for results.$(RESET)"
+
+cppcheck:
+	@echo "$(WHITE)Running Cppcheck...$(RESET)"
+	@cppcheck --std=c23 --enable=all --suppress=missingIncludeSystem \
+	          --suppress=unusedFunction --suppress=preprocessorError \
+	          --suppress=staticFunction \
+	          -Iinclude -Ideps/xdl/xdl/src/main/cpp/include \
+	          -Ideps/shadowhook/shadowhook/src/main/cpp/include \
+	          $(MEMKIT_SRCS) 2>&1 | tee build/cppcheck-report.txt
+	@echo "$(GREEN)Cppcheck complete. Results saved to build/cppcheck-report.txt$(RESET)"
+
+sanitize-asan: CFLAGS += -fsanitize=address -g -fno-omit-frame-pointer
+sanitize-asan: $(LIB_DIR)/libmemkit.so
+	@echo "$(GREEN)Build with AddressSanitizer complete.$(RESET)"
+	@echo "$(YELLOW)Run on Android device with: setprop wrap.com.your.app 'logwrapper /system/bin/sh'$(RESET)"
+
+sanitize-ubsan: CFLAGS += -fsanitize=undefined -g
+sanitize-ubsan: $(LIB_DIR)/libmemkit.so
+	@echo "$(GREEN)Build with UndefinedBehaviorSanitizer complete.$(RESET)"

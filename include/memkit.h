@@ -112,11 +112,7 @@ void *memkit_hook_sym_addr(void *sym_addr, void *new_addr, void **orig_addr);
 // IL2CPP API (XDL)
 // ============================================================================
 
-/**
- * Initialize IL2CPP handle (call once or let resolve auto-initialize)
- * @return true on success, false on failure
- */
-bool memkit_il2cpp_init(void);
+
 
 /**
  * Resolve an IL2CPP export symbol from .dynsym

@@ -48,7 +48,19 @@ endif()
 # Compiler Flags
 # ============================================================================
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -fPIC")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c23 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wdouble-promotion -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wimplicit-fallthrough -Wvla -Wno-macro-redefined")
+
+if(ENABLE_ASAN)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer -g")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=address")
+    message(STATUS "AddressSanitizer: ENABLED")
+endif()
+
+if(ENABLE_UBSAN)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined -g")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=undefined")
+    message(STATUS "UndefinedBehaviorSanitizer: ENABLED")
+endif()
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -llog")
 
 # ============================================================================
@@ -64,6 +76,9 @@ else()
 endif()
 
 option(USE_LOCAL_DEPS "Use local dependencies from deps/ folder" ON)
+
+option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 
 # ============================================================================
 # Include Directories

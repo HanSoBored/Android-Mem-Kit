@@ -9,6 +9,7 @@
 #include <string.h>
 #include <libgen.h>
 #include <limits.h>
+#include <link.h>
 
 #include "memkit.h"
 #include "xdl.h"
@@ -27,16 +28,14 @@ typedef struct {
 
 // Thread-local storage for basename buffer (prevents race conditions)
 // Each thread gets its own buffer, making memkit_xdl_iterate() thread-safe
-__thread static char tls_basename_buf[PATH_MAX];
+static __thread char tls_basename_buf[PATH_MAX];
 
 static int scan_callback_adapter(struct dl_phdr_info* info, size_t size, void* data) {
-    (void)size;  // Unused parameter
+    (void)size;
     scan_callback_ctx_t* ctx = (scan_callback_ctx_t*)data;
 
     MemKitLibInfo lib_info = {0};
 
-    // Extract basename if not full pathname
-    // Note: basename() may modify its input, so we use thread-local buffer
     if (ctx->flags & XDL_FULL_PATHNAME) {
         lib_info.path = info->dlpi_name;
         if (info->dlpi_name && info->dlpi_name[0] != '\0') {
@@ -53,7 +52,6 @@ static int scan_callback_adapter(struct dl_phdr_info* info, size_t size, void* d
 
     lib_info.base = info->dlpi_addr;
 
-    // Calculate size from program headers
     lib_info.size = 0;
     for (size_t i = 0; i < info->dlpi_phnum; i++) {
         if (info->dlpi_phdr[i].p_type == PT_LOAD) {
@@ -61,14 +59,11 @@ static int scan_callback_adapter(struct dl_phdr_info* info, size_t size, void* d
         }
     }
 
-    // Call user callback
-    // xdl_iterate_phdr: return 0 to continue, non-zero to stop
-    // Our callback: return true to continue, false to stop
     if (ctx->user_callback(&lib_info, ctx->user_data)) {
         ctx->count++;
-        return 0;  // Continue iteration
+        return 0;
     } else {
-        return 1;  // Stop iteration
+        return 1;
     }
 }
 
@@ -223,6 +218,8 @@ bool memkit_xdl_addr_to_symbol4(void* addr, MemKitSymInfo* out, memkit_addr_ctx_
 // ============================================================================
 // PHASE 3: ADVANCED FEATURES
 // ============================================================================
+
+void* memkit_xdl_open_from_phdr(struct dl_phdr_info* info);
 
 void* memkit_xdl_open_from_phdr(struct dl_phdr_info* info) {
     if (!info) {

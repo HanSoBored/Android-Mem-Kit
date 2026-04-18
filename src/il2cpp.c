@@ -11,13 +11,13 @@
 // ============================================================================
 
 static void* g_il2cpp_handle = NULL;
-static atomic_bool g_initialized = ATOMIC_VAR_INIT(false);
+static atomic_bool g_initialized;
 
 // ============================================================================
-// IL2CPP: INITIALIZATION
+// IL2CPP: INITIALIZATION (Internal)
 // ============================================================================
 
-bool memkit_il2cpp_init(void) {
+static bool memkit_il2cpp_init_internal(void) {
     bool expected = false;
     
     // Only the first thread (CAS succeeds) executes memkit_xdl_open
@@ -41,7 +41,7 @@ bool memkit_il2cpp_init(void) {
 
 void* memkit_il2cpp_get_handle(void) {
     // Ensure initialization
-    memkit_il2cpp_init();
+    memkit_il2cpp_init_internal();
     return g_il2cpp_handle;
 }
 
@@ -55,7 +55,7 @@ void* memkit_il2cpp_resolve(const char* symbol_name) {
     }
 
     // Ensure initialization (thread-safe via atomics)
-    memkit_il2cpp_init();
+    memkit_il2cpp_init_internal();
 
     // If handle is NULL, try to open directly
     if (!g_il2cpp_handle) {
@@ -82,7 +82,7 @@ void* memkit_il2cpp_resolve_symtab(const char* symbol_name) {
     }
 
     // Ensure initialization (thread-safe via atomics)
-    memkit_il2cpp_init();
+    memkit_il2cpp_init_internal();
 
     if (!g_il2cpp_handle) {
         return NULL;
