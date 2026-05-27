@@ -1,42 +1,113 @@
-#include <sys/system_properties.h>
 #include <android/log.h>
+#include <dlfcn.h>
+#include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
-// The real sh_linker_init from ShadowHook's statically-linked code.
-// The linker --wrap flag replaces references to sh_linker_init with __wrap_sh_linker_init,
-// and makes the real implementation available as __real_sh_linker_init.
+#include "nothing_path.h"
+
+// ============================================================================
+// LINKER WRAP INTERFACES
+//
+// These functions are linked via --wrap flags in LDFLAGS:
+//   -Wl,--wrap,dlopen        → __wrap_dlopen / __real_dlopen
+//   -Wl,--wrap,sh_linker_init → __wrap_sh_linker_init / __real_sh_linker_init
+//
+// The real implementations are from:
+//   dlopen()        → libc (bionic's dynamic linker)
+//   sh_linker_init() → ShadowHook's statically-linked code
+// ============================================================================
+
+extern void *__real_dlopen(const char *filename, int flags);
 extern int __real_sh_linker_init(void);
 
-static int get_android_api_level(void) {
-    char value[PROP_VALUE_MAX] = {0};
-    int len = __system_property_get("ro.build.version.sdk", value);
-    if (len <= 0) return 0;
-    return (int)atoi(value);
+// Forward declarations for --wrap entry points
+// These are called by the linker when --wrap,dlopen and --wrap,sh_linker_init
+// are used. Declared here to suppress -Wmissing-prototypes.
+void *__wrap_dlopen(const char *filename, int flags);
+int __wrap_sh_linker_init(void);
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Check if filename refers to libshadowhook_nothing.so (by basename).
+ *
+ * This is more precise than strstr() which could match paths like
+ * "/some/libfake_libshadowhook_nothing.so_copy".
+ */
+static bool is_nothing_lib(const char *filename) {
+    if (!filename) return false;
+    const char *base = strrchr(filename, '/');
+    if (!base) {
+        base = filename;
+    } else {
+        base++;
+    }
+    return strcmp(base, "libshadowhook_nothing.so") == 0;
 }
 
-// This function replaces sh_linker_init at link time via -Wl,--wrap,sh_linker_init
+// ============================================================================
+// __wrap_dlopen — Intercept dlopen calls for libshadowhook_nothing.so
 //
-// We unconditionally skip sh_linker_init() because:
-// 1. On Android 15 (API 35): linker internal symbols changed, hooking ctor/dtor fails
-// 2. On some devices < API 35: the same failure occurs due to OEM ROM modifications
+// ShadowHook's sh_linker_soinfo_memory_scan_pre (called during sh_linker_init)
+// attempts dlopen("libshadowhook_nothing.so") to get the linker to create a
+// soinfo entry. On Android 15+ with non-standard injection paths, this fails
+// because the library isn't in the app's linker namespace.
 //
-// The ShadowHook linker module is ONLY used for dl_init/dl_fini callbacks
-// (tracking when libraries are loaded/unloaded). Core hooking APIs work fine without it:
-//   - shadowhook_hook_func_addr()   ✅ works
-//   - shadowhook_hook_sym_addr()    ✅ works
-//   - shadowhook_hook_sym_name()    ✅ works
-//   - shadowhook_hook_sym_name_callback() ✅ works
+// We intercept the call and redirect it to either:
+//   1. A user-specified path (via memkit_set_nothing_path())
+//   2. An auto-extracted temp file from the embedded blob
+// ============================================================================
+
+void *__wrap_dlopen(const char *filename, int flags) {
+    if (is_nothing_lib(filename)) {
+        char *path = memkit_ensure_nothing_path();
+        if (path) {
+            void *handle = __real_dlopen(path, flags);
+            if (handle) {
+                memkit_consume_nothing_path();
+            }
+            free(path);
+            return handle;
+        }
+        __android_log_print(ANDROID_LOG_WARN, "memkit",
+            "nothing path resolution failed, falling through to real dlopen. "
+            "ShadowHook linker init will likely fail.");
+    }
+    return __real_dlopen(filename, flags);
+}
+
+// ============================================================================
+// __wrap_sh_linker_init — Intercept ShadowHook linker initialization
 //
-// What WON'T work:
-//   - shadowhook_register_dl_init_callback() ❌ callbacks never fire
+// Strategy:
+//   1. Try the real sh_linker_init() first. Our __wrap_dlopen ensures the
+//      nothing library can be found, which may allow linker init to succeed
+//      on some devices/configurations.
+//   2. If the real init fails (e.g., xdl_open still uses a hardcoded path
+//      that doesn't exist), fall back to skipping linker init entirely.
+//
+// When linker init is skipped:
+//   - Core hooking APIs work fine:
+//       shadowhook_hook_func_addr()   ✅
+//       shadowhook_hook_sym_addr()    ✅
+//       shadowhook_hook_sym_name()    ✅
+//       shadowhook_hook_sym_name_callback() ✅
+//   - dl_init/dl_fini callbacks are disabled:
+//       shadowhook_register_dl_init_callback() ❌
+//       shadowhook_register_dl_fini_callback() ❌
+// ============================================================================
+
 int __wrap_sh_linker_init(void) {
-    int api_level = get_android_api_level();
+    // Try real init first — our __wrap_dlopen makes the nothing library findable
+    int ret = __real_sh_linker_init();
+    if (ret == 0) return 0;
 
-    __android_log_print(ANDROID_LOG_INFO, "memkit",
-        "sh_linker_init skipped (API %d). "
-        "Core hooking works; dl_init/dl_fini callbacks disabled.", api_level);
-
-    // Always return success — skip linker module init entirely
-    (void)__real_sh_linker_init; // suppress unused warning
+    // Fallback: skip linker module init
+    __android_log_print(ANDROID_LOG_WARN, "memkit",
+        "sh_linker_init failed (%d): dl_init/dl_fini callbacks disabled. "
+        "Core hooking works.", ret);
     return 0;
 }
