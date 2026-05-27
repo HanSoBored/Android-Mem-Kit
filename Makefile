@@ -15,6 +15,7 @@ ANDROID_PLATFORM ?= android-35
 BUILD_DIR = build/$(ANDROID_ABI)
 OBJ_DIR = $(BUILD_DIR)/obj
 LIB_DIR = $(BUILD_DIR)/lib
+GEN_DIR = $(BUILD_DIR)/gen
 
 HOST_TAG = linux-x86_64
 TOOLCHAIN = $(NDK_HOME)/toolchains/llvm/prebuilt/$(HOST_TAG)/bin
@@ -52,12 +53,16 @@ endef
 # Flags & Sources
 # ============================================================================
 
-CFLAGS = -std=c23 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wdouble-promotion \
-         -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wold-style-definition \
+# NOTE: -std=c23 also set via CMAKE_C_STANDARD 23 in CMakeLists.txt
+CFLAGS = -std=c23 -Wall -Wextra -Wpedantic -Wshadow -Wconversion \
+         -Wdouble-promotion -Wnull-dereference -Wformat=2 \
+         -Wstrict-prototypes -Wold-style-definition \
          -Wmissing-prototypes -Wimplicit-fallthrough -Wvla \
          -Werror=implicit-function-declaration -Werror=int-conversion \
          -fPIC -O2 -Wno-macro-redefined -fdiagnostics-format=clang
 INCLUDES = -Iinclude \
+           -I$(GEN_DIR) \
+           -Isrc \
            -Ideps/xdl/xdl/src/main/cpp/include \
            -Ideps/shadowhook/shadowhook/src/main/cpp/include \
            -Ideps/shadowhook/shadowhook/src/main/cpp \
@@ -67,9 +72,13 @@ INCLUDES = -Iinclude \
            -Ideps/shadowhook/shadowhook/src/main/cpp/third_party/xdl \
            -Ideps/shadowhook/shadowhook/src/main/cpp/third_party/lss
 
-LDFLAGS = -shared -llog -landroid
+SHARED_LDFLAGS = -shared -llog -landroid \
+          -Wl,--wrap,dlopen \
+          -Wl,--wrap,sh_linker_init
 
-MEMKIT_SRCS = src/memory.c src/hooking.c src/hooking_flags.c src/intercept.c src/records.c src/runtime_config.c src/dl_callbacks.c src/il2cpp.c src/il2cpp_safe.c src/xdl_wrapper.c
+TEST_LDFLAGS = -pie -llog -landroid
+
+MEMKIT_SRCS = src/memory.c src/hooking.c src/hooking_flags.c src/intercept.c src/records.c src/runtime_config.c src/dl_callbacks.c src/il2cpp.c src/il2cpp_safe.c src/xdl_wrapper.c src/nothing_path.c src/shadowhook_override.c
 SH_DIR = deps/shadowhook/shadowhook/src/main/cpp
 SH_SRCS = $(SH_DIR)/arch/$(SH_ARCH)/sh_inst.c \
           $(SH_DIR)/arch/$(SH_ARCH)/sh_glue.S \
@@ -79,7 +88,6 @@ SH_SRCS = $(SH_DIR)/arch/$(SH_ARCH)/sh_inst.c \
           $(SH_DIR)/common/sh_ref.c \
           $(SH_DIR)/common/sh_trampo.c \
           $(SH_DIR)/common/sh_util.c \
-          $(SH_DIR)/nothing/sh_nothing.c \
           $(SH_DIR)/sh_elf.c \
           $(SH_DIR)/sh_enter.c \
           $(SH_DIR)/sh_hub.c \
@@ -171,13 +179,46 @@ directories:
 	@mkdir -p $(OBJ_DIR)/shadowhook/third_party/xdl
 	@mkdir -p $(OBJ_DIR)/tests
 	@mkdir -p $(LIB_DIR)
+	@mkdir -p $(GEN_DIR)
 
-$(LIB_DIR)/libmemkit.so: $(ALL_OBJS)
+$(LIB_DIR)/libmemkit.so: $(ALL_OBJS) $(GEN_DIR)/nothing_embed.h
 	@printf "$(WHITE)[100%%] $(YELLOW)[LD] $(WHITE)%s$(RESET)\n" "$@"
-	@$(CC) $(LDFLAGS) -o $@ $^
+	@$(CC) $(SHARED_LDFLAGS) -o $@ $(ALL_OBJS)
 	@$(STRIP) --strip-unneeded $@
 	@echo ""
 	@echo "$(GREEN)BUILD SUCCESSFUL!$(RESET)"
+
+# NOTE: Keep flags in sync with CMakeLists.txt's shadowhook_nothing target
+$(LIB_DIR)/libshadowhook_nothing.so: $(SH_DIR)/nothing/sh_nothing.c
+	@mkdir -p $(LIB_DIR)
+	@if [ "$(ANDROID_ABI)" = "arm64-v8a" ]; then \
+		NOTHING_TARGET=aarch64-linux-android; \
+		ARCH_LINK_FLAGS="-Wl,-z,max-page-size=16384"; \
+	elif [ "$(ANDROID_ABI)" = "armeabi-v7a" ]; then \
+		NOTHING_TARGET=armv7a-linux-androideabi; \
+		ARCH_LINK_FLAGS=""; \
+	fi; \
+	API_LEVEL=$(subst android-,,$(ANDROID_PLATFORM)); \
+	NOTHING_CC=$(TOOLCHAIN)/$$NOTHING_TARGET$$API_LEVEL-clang; \
+	printf "$(WHITE)[100%%] $(YELLOW)[LD] $(WHITE)%s$(RESET)\n" "$@"; \
+	$$NOTHING_CC -shared -Oz -fno-ident -fno-unwind-tables -fno-asynchronous-unwind-tables \
+		-Wl,--strip-all -Wl,--as-needed -Wl,--hash-style=sysv -Wl,--build-id=none \
+		-Wl,-nostdlib -nostartfiles -nodefaultlibs -Wl,-soname,libshadowhook_nothing.so \
+		$$ARCH_LINK_FLAGS \
+		-o $@ $< && \
+	$(STRIP) --strip-unneeded $@
+
+# Auto-generate nothing_embed.h from the compiled nothing library
+# (mirrors CMake's gen_nothing_header.cmake logic)
+# NOTE: Requires cmake to be installed on the build host.
+# This invokes gen_nothing_header.cmake to convert the .so binary into
+# a C header with an embedded byte array for the auto-extract fallback.
+$(GEN_DIR)/nothing_embed.h: $(LIB_DIR)/libshadowhook_nothing.so
+	@printf "$(WHITE)[GEN] $(WHITE)%s$(RESET)\n" "$@"
+	@cmake -DINPUT_FILE=$< -DOUTPUT_FILE=$@ -P cmake/gen_nothing_header.cmake
+
+# nothing_path.c includes nothing_embed.h — explicit dependency
+$(OBJ_DIR)/src/nothing_path.o: $(GEN_DIR)/nothing_embed.h
 
 # Main sources
 $(OBJ_DIR)/src/%.o: src/%.c
@@ -220,7 +261,7 @@ test: banner directories $(LIB_DIR)/libmemkit.so $(TEST_BIN)
 
 $(TEST_BIN): $(TEST_OBJS) $(LIB_DIR)/libmemkit.so
 	@printf "$(WHITE)[TEST] $(YELLOW)[LD] $(WHITE)%s$(RESET)\n" "$@"
-	@$(CC) $(LDFLAGS) -o $@ $(TEST_OBJS) -L$(LIB_DIR) -lmemkit
+	@$(CC) $(TEST_LDFLAGS) -o $@ $(TEST_OBJS) -L$(LIB_DIR) -lmemkit
 
 $(OBJ_DIR)/tests/%.o: tests/%.c
 	$(call update_progress)
@@ -245,7 +286,8 @@ cppcheck:
 	@cppcheck --std=c23 --enable=all --suppress=missingIncludeSystem \
 	          --suppress=unusedFunction --suppress=preprocessorError \
 	          --suppress=staticFunction \
-	          -Iinclude -Ideps/xdl/xdl/src/main/cpp/include \
+	          -Iinclude -I$(GEN_DIR) -Isrc \
+	          -Ideps/xdl/xdl/src/main/cpp/include \
 	          -Ideps/shadowhook/shadowhook/src/main/cpp/include \
 	          $(MEMKIT_SRCS) 2>&1 | tee build/cppcheck-report.txt
 	@echo "$(GREEN)Cppcheck complete. Results saved to build/cppcheck-report.txt$(RESET)"
