@@ -48,7 +48,7 @@ endif()
 # Compiler Flags
 # ============================================================================
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c23 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wdouble-promotion -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wimplicit-fallthrough -Wvla -Wno-macro-redefined")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wdouble-promotion -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wimplicit-fallthrough -Wvla -Wno-macro-redefined -fdiagnostics-format=clang")
 
 if(ENABLE_ASAN)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer -g")
@@ -61,7 +61,7 @@ if(ENABLE_UBSAN)
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=undefined")
     message(STATUS "UndefinedBehaviorSanitizer: ENABLED")
 endif()
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -llog")
+# -llog is linked via target_link_libraries(memkit log) below
 
 # ============================================================================
 # Build Options
@@ -97,7 +97,13 @@ if(USE_LOCAL_DEPS)
     set(XDL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/xdl/xdl)
     if(EXISTS ${XDL_DIR})
         include_directories(${XDL_DIR}/src/main/cpp/include)
-        file(GLOB XDL_SOURCES ${XDL_DIR}/src/main/cpp/*.c)
+        set(XDL_SOURCES
+            ${XDL_DIR}/src/main/cpp/xdl.c
+            ${XDL_DIR}/src/main/cpp/xdl_iterate.c
+            ${XDL_DIR}/src/main/cpp/xdl_linker.c
+            ${XDL_DIR}/src/main/cpp/xdl_lzma.c
+            ${XDL_DIR}/src/main/cpp/xdl_util.c
+        )
         add_library(xdl STATIC ${XDL_SOURCES})
         target_compile_definitions(xdl PRIVATE __ANDROID__API__=35)
         message(STATUS "Using local XDL: ${XDL_DIR}")
@@ -146,7 +152,6 @@ if(USE_LOCAL_DEPS)
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/sh_ref.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/sh_trampo.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/common/sh_util.c
-            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/nothing/sh_nothing.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_elf.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_enter.c
             ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/sh_hub.c
@@ -168,6 +173,40 @@ if(USE_LOCAL_DEPS)
         )
         add_library(shadowhook STATIC ${SHADOWHOOK_SOURCES})
         target_compile_definitions(shadowhook PRIVATE __ANDROID__API__=35)
+        
+        # Build libshadowhook_nothing.so (required for Android 15+ compatibility)
+        # Always built to generate architecture-correct embed header for the
+        # auto-extract fallback, even when memkit itself is a static library.
+        # NOTE: Keep flags in sync with Makefile's libshadowhook_nothing target
+        add_library(shadowhook_nothing SHARED
+            ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/nothing/sh_nothing.c)
+        target_compile_options(shadowhook_nothing PRIVATE
+            -Oz
+            -Weverything
+            -Werror
+            -fno-ident
+            -fno-unwind-tables
+            -fno-asynchronous-unwind-tables
+        )
+        set(_shl
+            "-Wl,--strip-all"
+            "-Wl,--as-needed"
+            "-Wl,--hash-style=sysv"
+            "-Wl,--build-id=none"
+            "-Wl,-nostdlib"
+            "-nostartfiles"
+            "-nodefaultlibs"
+            "-Wl,-soname,libshadowhook_nothing.so"
+        )
+        if(ANDROID_ABI STREQUAL "arm64-v8a")
+            list(APPEND _shl "-Wl,-z,max-page-size=16384")
+        endif()
+        target_link_options(shadowhook_nothing PRIVATE ${_shl})
+        unset(_shl)
+        set_target_properties(shadowhook_nothing PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib"
+        )
+        
         message(STATUS "Using local ShadowHook: ${SHADOWHOOK_DIR}")
     else()
         message(WARNING "Local ShadowHook not found. Clone deps via 'git submodule update --init --recursive' or set USE_LOCAL_DEPS=OFF")
@@ -195,6 +234,9 @@ else()
 
     message(STATUS "Fetching dependencies from git...")
     FetchContent_MakeAvailable(xdl shadowhook)
+
+    set(SHADOWHOOK_DIR ${shadowhook_SOURCE_DIR})
+    set(XDL_DIR ${xdl_SOURCE_DIR})
 endif()
 
 # ============================================================================
@@ -208,6 +250,32 @@ else()
     set(LIB_TYPE STATIC)
 endif()
 
+# Generate nothing_embed.h from the compiled libshadowhook_nothing.so
+# Always generated when shadowhook_nothing target exists (local deps),
+# ensuring the embed header matches the target architecture.
+set(NOTHING_EMBED_H_PATH "${CMAKE_CURRENT_BINARY_DIR}/gen/nothing_embed.h")
+
+if(TARGET shadowhook_nothing)
+    add_custom_command(
+        OUTPUT ${NOTHING_EMBED_H_PATH}
+        COMMAND ${CMAKE_COMMAND}
+            -DINPUT_FILE="$<TARGET_FILE:shadowhook_nothing>"
+            -DOUTPUT_FILE=${NOTHING_EMBED_H_PATH}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/gen_nothing_header.cmake
+        DEPENDS shadowhook_nothing
+        COMMENT "Generating nothing_embed.h from libshadowhook_nothing.so"
+    )
+    add_custom_target(generate_nothing_embed DEPENDS ${NOTHING_EMBED_H_PATH})
+else()
+    # Fallback (when shadowhook_nothing target isn't available, e.g. FetchContent path):
+    # use pre-generated header from source tree.
+    message(WARNING
+        "shadowhook_nothing target not found; using pre-generated "
+        "arm64-v8a embed header. Set USE_LOCAL_DEPS=ON for multi-ABI support."
+    )
+    set(NOTHING_EMBED_H_PATH "${CMAKE_CURRENT_SOURCE_DIR}/src/nothing_embed.h")
+endif()
+
 add_library(memkit ${LIB_TYPE}
     src/memory.c
     src/hooking.c
@@ -219,19 +287,31 @@ add_library(memkit ${LIB_TYPE}
     src/il2cpp.c
     src/il2cpp_safe.c
     src/xdl_wrapper.c
+    src/nothing_path.c
+    src/shadowhook_override.c
 )
 
-# Set library type based on MEMKIT_BUILD_SHARED option
-if(MEMKIT_BUILD_SHARED)
-    set_target_properties(memkit PROPERTIES LINKER_LANGUAGE C)
-else()
-    set_target_properties(memkit PROPERTIES LINKER_LANGUAGE C)
+# Add dependency on generated header
+if(TARGET generate_nothing_embed)
+    add_dependencies(memkit generate_nothing_embed)
 endif()
 
+# Set library type based on MEMKIT_BUILD_SHARED option
+set_target_properties(memkit PROPERTIES LINKER_LANGUAGE C)
+
+target_include_directories(memkit PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include          # memkit.h (public API)
+)
+if(DEFINED SHADOWHOOK_DIR)
+    # shadowhook.h is PUBLIC because memkit.h includes it
+    target_include_directories(memkit PUBLIC
+        ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/include
+    )
+endif()
 target_include_directories(memkit PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${XDL_DIR}/include
-    ${SHADOWHOOK_DIR}/shadowhook/src/main/cpp/include
+    ${CMAKE_CURRENT_BINARY_DIR}/gen
 )
 
 target_link_libraries(memkit
@@ -240,6 +320,30 @@ target_link_libraries(memkit
     log
     android
 )
+
+# --wrap flags: intercept dlopen and sh_linker_init at link time
+if(MEMKIT_BUILD_SHARED)
+    target_link_options(memkit PRIVATE
+        "LINKER:--wrap,dlopen"
+        "LINKER:--wrap,sh_linker_init"
+    )
+else()
+    # NOTE: When memkit is built as a STATIC library, the --wrap flags are
+    # propagated via INTERFACE. This means any consumer linking against
+    # libmemkit.a will also have dlopen and sh_linker_init wrapped.
+    #
+    # This is intentional — it ensures __wrap_dlopen intercepts the
+    # libshadowhook_nothing.so dlopen() call even when memkit is statically
+    # linked into a larger shared library.
+    #
+    # LIMITATION: If the consumer already wraps dlopen for other purposes,
+    # this may cause linker conflicts. In that case, consider building memkit
+    # as a SHARED library (MEMKIT_BUILD_SHARED=ON) where the flags are PRIVATE.
+    target_link_options(memkit INTERFACE
+        "LINKER:--wrap,dlopen"
+        "LINKER:--wrap,sh_linker_init"
+    )
+endif()
 
 set_target_properties(memkit PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib"
