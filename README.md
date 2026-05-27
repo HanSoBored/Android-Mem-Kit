@@ -53,6 +53,9 @@ This library is intended for:
 ```bash
 # NDK r25b or newer required
 export ANDROID_NDK_HOME=/path/to/your/android-ndk
+
+# CMake 3.14+ required (used by Makefile to generate embed headers)
+# Install via: sudo apt install cmake  (or brew install cmake)
 ```
 
 ### 2. Clone & Setup
@@ -146,7 +149,13 @@ Android-Mem-Kit/
 │   ├── dl_callbacks.c      # DL init/fini callbacks
 │   ├── il2cpp.c            # IL2CPP symbol resolution
 │   ├── il2cpp_safe.c       # IL2CPP safe call helpers (sigsetjmp/siglongjmp)
-│   └── xdl_wrapper.c       # xDL wrapper layer
+│   ├── xdl_wrapper.c       # xDL wrapper layer
+│   ├── shadowhook_override.c # dlopen/sh_linker_init wrappers for Android 15
+│   ├── nothing_path.c      # Nothing library temp file extraction
+│   ├── nothing_path.h      # Internal header for nothing path management
+│   └── nothing_embed.h     # Embedded libshadowhook_nothing.so blob (auto-generated)
+├── cmake/
+│   └── gen_nothing_header.cmake # CMake script: .so → C header converter
 ├── examples/
 │   └── main.c              # Complete usage example
 ├── docs/                   # Documentation
@@ -161,22 +170,28 @@ Android-Mem-Kit/
 
 When using ShadowHook on **Android 15 (API 35)**, you may encounter **error code 12** (`MK_ERRNO_INIT_LINKER`) during `memkit_hook_init()`. This is caused by changes to Android's internal linker behavior in Android 15 that affect ShadowHook's hooking mechanism.
 
-**Affected versions:** ShadowHook < v1.0.10
+**Root Cause:** ShadowHook requires `libshadowhook_nothing.so` to be present alongside `libshadowhook.so` for proper Android 15+ compatibility. When building from local sources (USE_LOCAL_DEPS=ON), this library is now automatically built as part of the CMake build process.
 
-**Workaround:**
-- Pin ShadowHook to **v1.0.10 or later** which includes Android 15 compatibility fixes.
-- If using local dependencies, update the submodule:
+**Solution:**
+- The CMakeLists.txt now **automatically builds `libshadowhook_nothing.so`** when using local dependencies
+- No manual action required - just rebuild your project:
   ```bash
-  cd deps/shadowhook
-  git checkout v1.0.10  # or later
+  make clean && make
   ```
-- If fetching via git (`USE_LOCAL_DEPS=OFF`), the CMakeLists.txt already fetches v1.3.0 which includes the fix.
 
-**Tracking:** See upstream issue [bytedance/android-inline-hook#91](https://github.com/bytedance/android-inline-hook/issues/91) for the latest status.
+**Tracking:** See upstream issue [bytedance/android-inline-hook#113](https://github.com/bytedance/android-inline-hook/issues/113) for the latest status.
 
 ### Subproject Builds
 
 When building memkit as a subproject (`add_subdirectory`), ensure you set `-DMEMKIT_BUILD_SHARED=OFF` to build a static library. The default is `OFF` for subprojects and `ON` for standalone builds.
+
+### Build Output
+
+The build process produces two files in `build/<ABI>/lib/`:
+- **libmemkit.so** - Main memkit library (~126KB for arm64-v8a)
+- **libshadowhook_nothing.so** - Required companion library for Android 15+ compatibility (~1.5KB)
+
+Both files must be packaged together in your APK's `lib/<ABI>/` directory.
 
 ---
 

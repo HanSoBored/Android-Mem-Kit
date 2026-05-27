@@ -56,6 +56,26 @@ void init() {
 }
 ```
 
+### Nothing Library Path
+
+The `libshadowhook_nothing.so` companion library is required by ShadowHook for Android 15+ compatibility. MemKit manages it automatically by default, but you can provide a custom path.
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_set_nothing_path(path)` | Set custom path for `libshadowhook_nothing.so` | `void` |
+| `memkit_get_nothing_path()` | Get current nothing library path | `char*` (caller frees) or NULL |
+
+Call `memkit_set_nothing_path()` **before** `memkit_hook_init()` if you manage the nothing library yourself. When not called, AMK automatically extracts the embedded library to a temp directory.
+
+```c
+// Option A: auto-extract (default — no call needed)
+memkit_hook_init(SHADOWHOOK_MODE_UNIQUE, false);
+
+// Option B: custom path
+memkit_set_nothing_path("/data/local/tmp/libshadowhook_nothing.so");
+memkit_hook_init(SHADOWHOOK_MODE_UNIQUE, false);
+```
+
 ---
 
 ## API Reference
