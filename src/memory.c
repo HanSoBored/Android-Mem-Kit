@@ -11,23 +11,113 @@
 #include "memkit.h"
 
 // ============================================================================
-// HELPER: CROSS-PAGE SAFE MPROTECT
-// Fixes CRITICAL BUG: Handle patches that span multiple memory pages
+// PAGE ALIGNMENT HELPERS (Cached page size)
 // ============================================================================
 
-static bool unprotect_memory(uintptr_t address, size_t size) {
-    long page_size = sysconf(_SC_PAGESIZE);
-    if (page_size <= 0) {
-        page_size = 4096; // Default page size
+static long get_page_size(void) {
+    static long cached_page_size = 0;
+    if (cached_page_size <= 0) {
+        cached_page_size = sysconf(_SC_PAGESIZE);
+        if (cached_page_size <= 0) cached_page_size = 4096;
     }
-    
-    // Calculate page boundaries (CRITICAL FIX)
-    // If patch is at end of page, we must protect both pages
-    uintptr_t page_start = address & ~(page_size - 1);
-    uintptr_t page_end = (address + size + page_size - 1) & ~(page_size - 1);
+    return cached_page_size;
+}
+
+static inline uintptr_t page_mask(void) {
+    return (uintptr_t)get_page_size() - 1;
+}
+
+static inline uintptr_t page_align_down(uintptr_t addr) {
+    return addr & ~page_mask();
+}
+
+static inline uintptr_t page_align_up(uintptr_t addr, size_t size) {
+    uintptr_t m = page_mask();
+    return (addr + size + m) & ~m;
+}
+
+// ============================================================================
+// HELPER: READ ORIGINAL MEMORY PERMISSIONS FROM /proc/self/maps
+//
+// Reads /proc/self/maps to determine the original memory protection flags
+// for the page range covering [address, address + size).
+//
+// Returns protection flags (PROT_READ | PROT_WRITE | PROT_EXEC combination)
+// on success, or -1 if the mapping cannot be determined.
+// ============================================================================
+
+static int get_prot_from_maps(uintptr_t address, size_t size) {
+    uintptr_t page_start = page_align_down(address);
+    uintptr_t page_end = page_align_up(address, size);
+
+    FILE *fp = fopen("/proc/self/maps", "r");
+    if (!fp) return -1;
+
+    char line[1024];
+    int result_prot = -1;
+
+    while (fgets(line, sizeof(line), fp)) {
+        uintptr_t map_start = 0;
+        uintptr_t map_end = 0;
+        char perm[8] = {0};
+
+        if (sscanf(line, "%" PRIxPTR "-%" PRIxPTR " %7s", &map_start, &map_end, perm) < 3)
+            continue;
+
+        // Check if this mapping covers our full page range
+        if (map_start <= page_start && map_end >= page_end) {
+            int prot = 0;
+            if (perm[0] == 'r') prot |= PROT_READ;
+            if (perm[1] == 'w') prot |= PROT_WRITE;
+            if (perm[2] == 'x') prot |= PROT_EXEC;
+            result_prot = prot;
+            break;
+        }
+    }
+
+    fclose(fp);
+    return result_prot;
+}
+
+// ============================================================================
+// HELPER: CROSS-PAGE SAFE MPROTECT
+// Fixes CRITICAL BUG: Handle patches that span multiple memory pages
+//
+// Sets pages to RWX and returns the original protection flags.
+// Returns original prot on success, -1 on failure.
+// ============================================================================
+
+static int unprotect_memory(uintptr_t address, size_t size) {
+    uintptr_t page_start = page_align_down(address);
+    uintptr_t page_end = page_align_up(address, size);
     size_t mprotect_len = page_end - page_start;
     
-    return mprotect((void*)page_start, mprotect_len, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+    // Save original permissions before changing to RWX
+    int orig_prot = get_prot_from_maps(page_start, mprotect_len);
+    
+    if (mprotect((void*)page_start, mprotect_len, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        return -1;
+    }
+    
+    return orig_prot;
+}
+
+// ============================================================================
+// HELPER: RESTORE ORIGINAL MEMORY PERMISSIONS
+//
+// Restores memory protection flags for the page range covering
+// [address, address + size). Call after patching is complete.
+//
+// Returns true on success, false on failure.
+// ============================================================================
+
+static bool protect_memory(uintptr_t address, size_t size, int prot) {
+    if (prot < 0) return false; // Original permissions unknown — skip restore
+
+    uintptr_t page_start = page_align_down(address);
+    uintptr_t page_end = page_align_up(address, size);
+
+    return mprotect((void*)page_start, page_end - page_start, prot) == 0;
 }
 
 // ============================================================================
@@ -200,7 +290,8 @@ MemPatch* memkit_patch_create(uintptr_t address, const char* hex_string) {
     
     // CRITICAL FIX: Unprotect memory BEFORE reading original bytes
     // This bypasses Execute-Only-Memory (XOM) protections on Android modern
-    if (!unprotect_memory(patch->address, patch->size)) {
+    int orig_prot = unprotect_memory(patch->address, patch->size);
+    if (orig_prot < 0) {
         free(patch->orig_bytes);
         free(patch->patch_bytes);
         free(patch);
@@ -209,6 +300,9 @@ MemPatch* memkit_patch_create(uintptr_t address, const char* hex_string) {
     
     // Safe to read original bytes now
     memcpy(patch->orig_bytes, (void*)patch->address, patch->size);
+    
+    // Restore original permissions — minimizes RWX window
+    protect_memory(patch->address, patch->size, orig_prot);
     
     return patch;
 }
@@ -223,8 +317,9 @@ bool memkit_patch_apply(MemPatch* patch) {
         return false;
     }
 
-    // Unprotect memory (cross-page safe)
-    if (!unprotect_memory(patch->address, patch->size)) {
+    // Unprotect memory (cross-page safe) — saves original permissions
+    int orig_prot = unprotect_memory(patch->address, patch->size);
+    if (orig_prot < 0) {
         errno = EACCES;  // Permission denied
         return false;
     }
@@ -237,6 +332,9 @@ bool memkit_patch_apply(MemPatch* patch) {
         (char*)patch->address, 
         (char*)(patch->address + patch->size)
     );
+    
+    // Restore original permissions — prevents leaving pages RWX
+    protect_memory(patch->address, patch->size, orig_prot);
     
     return true;
 }
@@ -251,8 +349,9 @@ bool memkit_patch_restore(MemPatch* patch) {
         return false;
     }
 
-    // Unprotect memory (cross-page safe)
-    if (!unprotect_memory(patch->address, patch->size)) {
+    // Unprotect memory (cross-page safe) — saves original permissions
+    int orig_prot = unprotect_memory(patch->address, patch->size);
+    if (orig_prot < 0) {
         errno = EACCES;  // Permission denied
         return false;
     }
@@ -265,6 +364,9 @@ bool memkit_patch_restore(MemPatch* patch) {
         (char*)patch->address, 
         (char*)(patch->address + patch->size)
     );
+    
+    // Restore original permissions — prevents leaving pages RWX
+    protect_memory(patch->address, patch->size, orig_prot);
     
     return true;
 }
