@@ -183,7 +183,15 @@ When using ShadowHook on **Android 15 (API 35)**, you may encounter **error code
 
 ### Subproject Builds
 
-When building memkit as a subproject (`add_subdirectory`), ensure you set `-DMEMKIT_BUILD_SHARED=OFF` to build a static library. The default is `OFF` for subprojects and `ON` for standalone builds.
+When building memkit as a subproject via `add_subdirectory()` in your parent project's `CMakeLists.txt`:
+
+```cmake
+enable_language(ASM)  # Required for shadowhook assembly (sh_glue.S). Needs CMake 3.9+.
+add_subdirectory(path/to/Android-Mem-Kit)
+target_link_libraries(your_lib memkit)
+```
+
+Set `-DMEMKIT_BUILD_SHARED=OFF` to build a static library. The default is `OFF` for subprojects and `ON` for standalone builds.
 
 ### Build Output
 

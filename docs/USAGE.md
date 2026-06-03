@@ -253,17 +253,17 @@ For C++ code, `MEMKIT_STACK_SCOPE()` provides automatic stack cleanup via RAII. 
 ```cpp
 void* my_proxy(int arg1, const char* arg2) {
     MEMKIT_STACK_SCOPE();  // Automatically calls memkit_pop_stack() on scope exit
-    
+
     if (!arg1) {
         return NULL;  // Early return — stack still popped automatically
     }
-    
+
     void* result = original_fn(arg1, arg2);
     return result;  // Normal return — stack popped by destructor
 }
 ```
 
-**When to use:** 
+**When to use:**
 - ✅ C++ proxy functions with multiple return paths
 - ✅ Code that may throw exceptions
 - ✅ Complex logic where manual `MEMKIT_POP_STACK()` is error-prone
@@ -1097,7 +1097,7 @@ static bool find_library_callback(const MemKitLibInfo* info, void* user_data) {
 
     if (strcmp(info->name, ctx->target) == 0) {
         ctx->base = info->base;
-        LOGI("Found %s at 0x%lx (size: %zu bytes)", 
+        LOGI("Found %s at 0x%lx (size: %zu bytes)",
              info->name, info->base, info->size);
         return false;  // Stop iteration
     }
@@ -1108,7 +1108,7 @@ static bool find_library_callback(const MemKitLibInfo* info, void* user_data) {
 
 void discover_libraries() {
     find_lib_ctx_t ctx = {.target = "libil2cpp.so"};
-    
+
     int count = memkit_xdl_iterate(find_library_callback, &ctx, XDL_DEFAULT);
     LOGI("Iterated %d libraries, found target at 0x%lx", count, ctx.base);
 }
@@ -1143,7 +1143,7 @@ void resolve_address(void* addr) {
     if (memkit_xdl_addr_to_symbol(addr, &info, ctx)) {
         LOGI("Address %p:", addr);
         LOGI("  Library: %s (base: 0x%lx)", info.lib_name, info.lib_base);
-        LOGI("  Symbol: %s (offset: 0x%lx, size: %zu)", 
+        LOGI("  Symbol: %s (offset: 0x%lx, size: %zu)",
              info.sym_name ? info.sym_name : "<unknown>",
              info.sym_offset, info.sym_size);
     } else {
@@ -1156,12 +1156,12 @@ void resolve_address(void* addr) {
 // Resolve multiple addresses (reuse context for performance)
 void resolve_multiple_addresses(void** addrs, int count) {
     memkit_addr_ctx_t* ctx = memkit_xdl_addr_ctx_create();
-    
+
     for (int i = 0; i < count; i++) {
         MemKitSymInfo info;
         if (memkit_xdl_addr_to_symbol(addrs[i], &info, ctx)) {
-            LOGI("[%d] %p -> %s!%s+0x%lx", 
-                 i, addrs[i], info.lib_name, 
+            LOGI("[%d] %p -> %s!%s+0x%lx",
+                 i, addrs[i], info.lib_name,
                  info.sym_name ? info.sym_name : "?", info.sym_offset);
         }
     }
@@ -1201,7 +1201,7 @@ void quick_lib_lookup(void* addr) {
 
     // Skip symbol resolution for faster results
     if (memkit_xdl_addr_to_symbol4(addr, &info, ctx, XDL_NON_SYM)) {
-        LOGI("Address %p is in %s (base: 0x%lx)", 
+        LOGI("Address %p is in %s (base: 0x%lx)",
              addr, info.lib_name, info.lib_base);
         // info.sym_name will be NULL (skipped)
     }
