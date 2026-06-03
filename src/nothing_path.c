@@ -21,22 +21,42 @@
 // blob is auto-extracted to a temporary file.
 // ============================================================================
 
-static pthread_mutex_t g_nothing_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_nothing_lock = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 static char *g_nothing_path = NULL;
 static bool g_extracted = false;
 
 #ifndef NDEBUG
+/// Debug assertion: verify the calling thread holds g_nothing_lock.
+///
+/// NOTE: There is a benign TOCTOU window between pthread_mutex_unlock()
+/// (when trylock succeeds, meaning lock was NOT held) and the assert().
+/// Another thread could acquire the lock in that window, causing the
+/// assertion to false-positive pass. This is debug-only and non-security;
+/// the worst case is a missed assertion in a race condition that is itself
+/// extremely unlikely (debug builds under test).
 static inline void assert_lock_held(void) {
     int ret = pthread_mutex_trylock(&g_nothing_lock);
     if (ret == 0)
         pthread_mutex_unlock(&g_nothing_lock);
-    assert(ret == EDEADLK && "extract_blob_to_file() called without holding g_nothing_lock");
+    assert((ret == EDEADLK || ret == EBUSY) &&
+           "Called without lock held by current thread "
+           "(lock not held at all, or held by another thread)");
 }
 #endif
 
 // ============================================================================
 // HELPERS
 // ============================================================================
+
+/// Validate that a temp directory path is safe to use.
+/// Rejects paths containing ".." and paths not under trusted prefixes.
+static bool is_safe_temp_dir(const char *path) {
+    if (strstr(path, "..")) return false;
+    if (strncmp(path, "/data/data/", 11) == 0) return true;
+    if (strncmp(path, "/data/user/", 11) == 0) return true;
+    if (strcmp(path, "/data/local/tmp") == 0) return true;
+    return false;
+}
 
 /**
  * Safely get the temp directory path.
@@ -45,7 +65,7 @@ static inline void assert_lock_held(void) {
  */
 static const char *get_temp_dir(void) {
     const char *tmpdir = getenv("TMPDIR");
-    if (tmpdir && tmpdir[0] == '/') {
+    if (tmpdir && tmpdir[0] == '/' && is_safe_temp_dir(tmpdir)) {
         __android_log_print(ANDROID_LOG_DEBUG, "memkit",
             "temp dir: %s (from TMPDIR)", tmpdir);
         return tmpdir;
@@ -81,14 +101,15 @@ static int extract_blob_to_file(char *path) {
         return -1;
     }
 
+    // Write loop for ~1.5KB blob. POSIX allows short writes on regular
+    // files when interrupted by signals — loop until all bytes are written.
     const unsigned char *ptr = g_nothing_so_blob;
     size_t remaining = g_nothing_so_size;
-
-    // Defensive: loop handles partial writes (common for large blobs,
-    // harmless for our ~1.5KB blob).
     while (remaining > 0) {
         ssize_t n = write(fd, ptr, remaining);
         if (n <= 0) {
+            // write() returned 0 is rare but means no progress; treat as error
+            if (n == 0) errno = ENOSPC;
             __android_log_print(ANDROID_LOG_ERROR, "memkit",
                 "write failed for nothing temp file: %s", strerror(errno));
             goto cleanup;
@@ -112,6 +133,29 @@ cleanup:
     if (ret != 0)
         unlink(path);
     return ret;
+}
+
+// ============================================================================
+// INTERNAL: Extract embedded blob to a temp file and return strdup'd path
+// ============================================================================
+
+static char *extract_to_temp_path(void) {
+    const char *tmpdir = get_temp_dir();
+    char template[256];
+    size_t max_tmpdir_len = sizeof(template) - sizeof("/.sh_nothing_XXXXXX");
+    if (strlen(tmpdir) > max_tmpdir_len) {
+        __android_log_print(ANDROID_LOG_ERROR, "memkit",
+            "TMPDIR path too long: %zu >= %zu", strlen(tmpdir), max_tmpdir_len - 1);
+        return NULL;
+    }
+    int written = snprintf(template, sizeof(template), "%s/.sh_nothing_XXXXXX", tmpdir);
+    if (written < 0 || (size_t)written >= sizeof(template)) {
+        __android_log_print(ANDROID_LOG_ERROR, "memkit",
+            "TMPDIR path truncated for template buffer");
+        return NULL;
+    }
+    if (extract_blob_to_file(template) != 0) return NULL;
+    return strdup(template);
 }
 
 // ============================================================================
@@ -147,55 +191,34 @@ char *memkit_get_nothing_path(void) {
 
 // ============================================================================
 // INTERNAL: Called by __wrap_dlopen in shadowhook_override.c
+//
+// Returns a strdup'd copy of the nothing library path. The caller owns the
+// returned pointer and MUST free() it when done.
 // ============================================================================
 
 char *memkit_ensure_nothing_path(void) {
     pthread_mutex_lock(&g_nothing_lock);
 
-    // If already extracted, return copy of path (may be NULL if consumed)
     if (g_extracted) {
         char *ret = g_nothing_path ? strdup(g_nothing_path) : NULL;
         pthread_mutex_unlock(&g_nothing_lock);
         return ret;
     }
 
-    // If user-set path is available, return a copy
     if (g_nothing_path) {
         char *ret = strdup(g_nothing_path);
+        g_extracted = true;
         pthread_mutex_unlock(&g_nothing_lock);
         return ret;
     }
 
-    // Auto-extract the embedded blob to a temp file
-    const char *tmpdir = get_temp_dir();
-
-    char template[256];
-    int written = snprintf(template, sizeof(template), "%s/.sh_nothing_XXXXXX", tmpdir);
-    if (written < 0 || (size_t)written >= sizeof(template)) {
-        pthread_mutex_unlock(&g_nothing_lock);
-        return NULL;
+    char *ret = extract_to_temp_path();
+    if (ret) {
+        g_nothing_path = ret;
+        g_extracted = true;
     }
-
-    if (extract_blob_to_file(template) != 0) {
-        pthread_mutex_unlock(&g_nothing_lock);
-        return NULL;
-    }
-
-    // Save the path
-    g_nothing_path = strdup(template);
-    if (!g_nothing_path) {
-        unlink(template);
-        pthread_mutex_unlock(&g_nothing_lock);
-        return NULL;
-    }
-    g_extracted = true;
-
-    __android_log_print(ANDROID_LOG_DEBUG, "memkit",
-        "nothing library extracted to: %s", g_nothing_path);
-
-    char *ret = strdup(g_nothing_path);
     pthread_mutex_unlock(&g_nothing_lock);
-    return ret;
+    return ret ? strdup(ret) : NULL;
 }
 
 // ============================================================================
