@@ -6,6 +6,7 @@
 #include <dlfcn.h>
 #include <link.h>
 #include <sched.h>
+#include <android/log.h>
 
 #include "memkit.h"
 
@@ -13,7 +14,7 @@
 // IL2CPP: STATIC STATE (Thread-Safe via C11 Atomics)
 // ============================================================================
 
-static _Atomic void* g_il2cpp_handle = NULL;
+static void* _Atomic g_il2cpp_handle = NULL;
 static atomic_bool g_initialized;
 static atomic_bool g_init_failed;
 
