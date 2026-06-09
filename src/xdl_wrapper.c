@@ -7,9 +7,11 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <libgen.h>
 #include <limits.h>
 #include <link.h>
+#include <android/log.h>
 
 #include "memkit.h"
 #include "xdl.h"
@@ -29,6 +31,25 @@ typedef struct {
 // Thread-local storage for basename buffer (prevents race conditions)
 // Each thread gets its own buffer, making memkit_xdl_iterate() thread-safe
 static __thread char tls_basename_buf[PATH_MAX];
+
+/**
+ * Sum p_memsz of all PT_LOAD segments from program header array.
+ * Accepts fields directly (no struct-type dependency) so it works with
+ * both struct dl_phdr_info and xdl_info_t (which share the same field
+ * names but are distinct C types).
+ *
+ * Extracted to DRY the PT_LOAD size computation that appeared in
+ * both scan_callback_adapter() and memkit_xdl_get_lib_info().
+ */
+static size_t compute_lib_size(const ElfW(Phdr)* phdr, size_t phnum) {
+    if (!phdr) return 0;
+    size_t size = 0;
+    for (size_t i = 0; i < phnum; i++) {
+        if (phdr[i].p_type == PT_LOAD)
+            size += phdr[i].p_memsz;
+    }
+    return size;
+}
 
 static int scan_callback_adapter(struct dl_phdr_info* info, size_t size, void* data) {
     (void)size;
@@ -52,12 +73,7 @@ static int scan_callback_adapter(struct dl_phdr_info* info, size_t size, void* d
 
     lib_info.base = info->dlpi_addr;
 
-    lib_info.size = 0;
-    for (size_t i = 0; i < info->dlpi_phnum; i++) {
-        if (info->dlpi_phdr[i].p_type == PT_LOAD) {
-            lib_info.size += info->dlpi_phdr[i].p_memsz;
-        }
-    }
+    lib_info.size = compute_lib_size(info->dlpi_phdr, info->dlpi_phnum);
 
     if (ctx->user_callback(&lib_info, ctx->user_data)) {
         ctx->count++;
@@ -116,6 +132,57 @@ void* memkit_xdl_dsym(void* handle, const char* symbol, size_t* out_size) {
     return xdl_dsym(handle, symbol, out_size);
 }
 
+// ============================================================================
+// CONVENIENCE: FIND LIB BASE VIA xdl_iterate_phdr
+// Uses linker internal structures — finds libs loaded from APKs in-place
+// ============================================================================
+
+typedef struct { const char* name; uintptr_t base; } find_lib_ctx_t;
+
+static bool find_lib_in_phdr(const MemKitLibInfo* info, void* user) {
+    find_lib_ctx_t* ctx = (find_lib_ctx_t*)user;
+    if (!info->name) return true;
+
+    /* Deterministic matching (replaces old strstr which was non-deterministic):
+     * 1. Exact basename match (e.g., "libil2cpp.so" == "libil2cpp.so")
+     * 2. Convenience: try appending .so (e.g., "libil2cpp" matches "libil2cpp.so")
+     *
+     * NOTE: Unlike strstr, this does NOT match "libil2cpp_hook.so" when
+     * searching for "libil2cpp". The old strstr behavior was non-deterministic
+     * because dl_iterate_phdr iteration order is undefined. */
+    if (strcmp(info->name, ctx->name) == 0) {
+        ctx->base = info->base;
+        return false;
+    }
+
+    /* Convenience: append .so and try again
+     * NOTE: If ctx->name already ends with ".so", step 1 (exact match) would
+     * have already matched it — so we unconditionally append .so here.
+     * NOTE: Versioned .so suffixes (e.g., "libfoo.so.1") are NOT matched
+     * by this convenience fallback; they must match exactly via step 1. */
+    char with_so[256];
+    int n = snprintf(with_so, sizeof(with_so), "%s.so", ctx->name);
+    if (n < 0 || (size_t)n >= sizeof(with_so))
+        return true;  /* name too long, skip gracefully */
+    if (strcmp(info->name, with_so) == 0) {
+        ctx->base = info->base;
+        return false;
+    }
+
+    return true;
+}
+
+uintptr_t memkit_get_lib_base_from_xdl(const char* lib_name) {
+    if (!lib_name) return 0;
+    find_lib_ctx_t ctx = { .name = lib_name, .base = 0 };
+    int ret = memkit_xdl_iterate(find_lib_in_phdr, &ctx, XDL_FULL_PATHNAME);
+    if (ret < 0) {
+        __android_log_print(ANDROID_LOG_WARN, "MemKit",
+                            "xdl_iterate_phdr failed for '%s'", lib_name);
+    }
+    return ctx.base;
+}
+
 bool memkit_xdl_get_lib_info(void* handle, MemKitLibInfo* out) {
     if (!handle || !out) {
         return false;
@@ -128,12 +195,16 @@ bool memkit_xdl_get_lib_info(void* handle, MemKitLibInfo* out) {
         return false;
     }
 
-    out->name = info.dli_fname ? info.dli_fname : "<unknown>";
-    out->path = info.dli_fname ? info.dli_fname : "<unknown>";
+    const char* fname = info.dli_fname ? info.dli_fname : "<unknown>";
+    out->path = fname;
+    /* Extract basename for name (e.g., "libc.so" from "/system/lib64/libc.so") */
+    const char* slash = strrchr(fname, '/');
+    out->name = slash ? slash + 1 : fname;
     out->base = (uintptr_t)info.dli_fbase;
 
-    // Note: phdr/phnum not exposed in this version for simplicity
-    // Can be added later if needed
+    /* Compute library size from PT_LOAD segment program headers
+     * (matching the pattern used in scan_callback_adapter) */
+    out->size = compute_lib_size(info.dlpi_phdr, info.dlpi_phnum);
 
     return true;
 }
