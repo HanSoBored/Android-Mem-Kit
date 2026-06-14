@@ -35,6 +35,8 @@ This library is intended for:
 | **Memory Patching** | Custom (mprotect-based) | Cross-page safe memory patching with XOM bypass |
 | **Function Hooking** | [ShadowHook](https://github.com/bytedance/android-inline-hook) | Inline hook with intercept, proxy chaining, and records |
 | **Symbol Resolution** | [XDL](https://github.com/hexhacking/xdl) | Bypasses Android 7+ linker restrictions |
+| **Enhanced Library Discovery** | `memkit_get_lib_base_v2()` | Finds libs loaded in-place from split APKs (Android 12+) |
+| **JIT Code Generation** | [SLJIT](https://github.com/zherczeg/sljit) | Platform-independent runtime code generation |
 | **IL2CPP Support** | Built-in | Unity app analysis and instrumentation |
 
 ### Why Pure C?
@@ -126,10 +128,8 @@ void init() {
 
 | Document | Content |
 |----------|---------|
-| **[docs/USAGE.md](docs/USAGE.md)** | Complete API reference, intercept API, records, runtime config, DL callbacks, troubleshooting |
-| **[docs/RECIPES.md](docs/RECIPES.md)** | Common patterns: SSL pinning bypass, integrity checks, function tracing |
-| **[docs/SECURITY_RESEARCH.md](docs/SECURITY_RESEARCH.md)** | Legitimate research examples |
-| **[docs/MIGRATION.md](docs/MIGRATION.md)** | Migration guide from the Rust version |
+| **[docs/USAGE.md](docs/USAGE.md)** | Complete API reference: memory, hooking, intercept, JIT, IL2CPP, XDL, records, DL callbacks |
+| **[docs/RECIPES.md](docs/RECIPES.md)** | Common patterns: SSL pinning bypass, integrity checks, JIT code generation |
 
 ---
 
@@ -138,28 +138,30 @@ void init() {
 ```
 Android-Mem-Kit/
 ├── include/
-│   └── memkit.h            # Public API header (~790 lines)
+│   ├── memkit.h            # Main public API header
+│   └── memkit_jit.h        # JIT compiler API (SLJIT wrappers)
 ├── src/
 │   ├── memory.c            # Memory patching (mprotect-based)
 │   ├── hooking.c           # Basic hook/unhook + error handling
 │   ├── hooking_flags.c     # V2 hook API with mode flags
-│   ├── intercept.c         # Intercept API (pre-call CPU context inspection)
+│   ├── intercept.c         # Intercept API (pre-call CPU context)
 │   ├── records.c           # Records API (operation logging)
 │   ├── runtime_config.c    # Runtime configuration
 │   ├── dl_callbacks.c      # DL init/fini callbacks
 │   ├── il2cpp.c            # IL2CPP symbol resolution
-│   ├── il2cpp_safe.c       # IL2CPP safe call helpers (sigsetjmp/siglongjmp)
+│   ├── il2cpp_safe.c       # IL2CPP safe call helpers
 │   ├── xdl_wrapper.c       # xDL wrapper layer
+│   ├── jit.c               # JIT thin wrappers (1:1 SLJIT mapping)
+│   ├── jit_highlevel.c     # JIT high-level helpers
 │   ├── shadowhook_override.c # dlopen/sh_linker_init wrappers for Android 15
 │   ├── nothing_path.c      # Nothing library temp file extraction
-│   ├── nothing_path.h      # Internal header for nothing path management
 │   └── nothing_embed.h     # Embedded libshadowhook_nothing.so blob (auto-generated)
 ├── cmake/
 │   └── gen_nothing_header.cmake # CMake script: .so → C header converter
 ├── examples/
-│   └── main.c              # Complete usage example
+│   └── main.c              # Complete usage example with JIT demo
 ├── docs/                   # Documentation
-└── deps/                   # Submodules: shadowhook, xdl
+└── deps/                   # Submodules: shadowhook, xdl, sljit
 ```
 
 ---
@@ -196,7 +198,7 @@ Set `-DMEMKIT_BUILD_SHARED=OFF` to build a static library. The default is `OFF` 
 ### Build Output
 
 The build process produces two files in `build/<ABI>/lib/`:
-- **libmemkit.so** - Main memkit library (~126KB for arm64-v8a)
+- **libmemkit.so** - Main memkit library (~190KB for arm64-v8a with JIT)
 - **libshadowhook_nothing.so** - Required companion library for Android 15+ compatibility (~1.5KB)
 
 Both files must be packaged together in your APK's `lib/<ABI>/` directory.
