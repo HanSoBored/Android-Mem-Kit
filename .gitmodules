@@ -4,3 +4,6 @@
 [submodule "deps/xdl"]
 	path = deps/xdl
 	url = https://github.com/hexhacking/xdl.git
+[submodule "deps/sljit"]
+	path = deps/sljit
+	url = https://github.com/zherczeg/sljit.git
