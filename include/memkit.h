@@ -11,11 +11,11 @@
 #include <stddef.h>
 #include <link.h>
 
-#include "shadowhook.h"
+/* Forward declaration for shadowhook.h compatibility on non-glibc platforms */
+struct dl_phdr_info;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "shadowhook.h"
+#include "sljitLir.h"
 
 // ============================================================================
 // MEMORY PATCHING API
@@ -820,34 +820,12 @@ void *memkit_hook_with_callback(const char *lib_name, const char *sym_name, void
 /* Hook by symbol name with completion callback (alias) */
 void *memkit_hook_by_symbol_callback(const char *lib_name, const char *sym_name, void *new_addr, void **orig_addr, MemKitHooked hooked, void *hooked_arg);
 
-#ifdef __cplusplus
-}
-
 // ============================================================================
-// C++ STACK SCOPE RAII HELPER
+// JIT COMPILER API (SLJIT Wrapper)
 // ============================================================================
+// Full wrapper API with thin wrappers and high-level helpers.
+// See memkit_jit.h for complete documentation.
 
-/**
- * RAII helper for automatic stack cleanup in proxy functions.
- * Ensures memkit_pop_stack() is called when the scope exits.
- *
- * Usage:
- *   void* my_proxy(int arg1, const char* arg2) {
- *       MEMKIT_STACK_SCOPE();
- *       // ... proxy logic ...
- *       return original_fn(arg1, arg2);
- *   }
- */
-class MemKitStackScope {
- public:
-  MemKitStackScope(void *return_address) : return_address_(return_address) {}
-  ~MemKitStackScope() {
-    memkit_pop_stack(return_address_);
-  }
- private:
-  void *return_address_;
-};
-#define MEMKIT_STACK_SCOPE() MemKitStackScope memkit_stack_scope_obj(__builtin_return_address(0))
-#endif
+#include "memkit_jit.h"
 
 #endif // MEMKIT_H

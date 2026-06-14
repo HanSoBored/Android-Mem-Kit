@@ -1,10 +1,6 @@
 #ifndef NOTHING_PATH_H
 #define NOTHING_PATH_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 // ============================================================================
 // NOTHING LIBRARY PATH — INTERNAL HEADER
 //
@@ -36,9 +32,5 @@ char *memkit_ensure_nothing_path(void);
  * Thread-safe.
  */
 void memkit_consume_nothing_path(void);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif // NOTHING_PATH_H
