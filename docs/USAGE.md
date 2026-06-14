@@ -7,8 +7,9 @@
 3. [Memory Patching](#memory-patching)
 4. [Function Hooking](#function-hooking)
 5. [IL2CPP Instrumentation](#il2cpp-instrumentation)
-6. [Error Handling](#error-handling)
-7. [Best Practices](#best-practices)
+6. [JIT Compiler API](#jit-compiler-api)
+7. [Error Handling](#error-handling)
+8. [Best Practices](#best-practices)
 
 ---
 
@@ -38,9 +39,10 @@ void init() {
     }
 
     // Step 2: Wait for target library to load
+    // Use memkit_get_lib_base_v2() for Android 12+ APK-loaded libs
     uintptr_t base = 0;
     for (int i = 0; i < 30 && base == 0; i++) {
-        base = memkit_get_lib_base("libtarget.so");
+        base = memkit_get_lib_base_v2("libtarget.so");
         if (base == 0) sleep(1);
     }
 
@@ -84,11 +86,44 @@ memkit_hook_init(SHADOWHOOK_MODE_UNIQUE, false);
 
 | Function | Description | Returns |
 |----------|-------------|---------|
-| `memkit_get_lib_base(const char* lib_name)` | Get lowest base address of loaded library | `uintptr_t` or 0 |
+| `memkit_get_lib_base(const char* lib_name)` | Get lowest base address via /proc/self/maps | `uintptr_t` or 0 |
+| `memkit_get_lib_base_v2(const char* lib_name)` | Enhanced discovery — tries maps, xdl, and APK ZIP parsing | `uintptr_t` or 0 |
+| `memkit_get_lib_base_in_apk(lib_entry, &out_base)` | Find library base by parsing APK ZIP files | `bool` |
 | `memkit_patch_create(addr, hex_string)` | Create memory patch from hex string | `MemPatch*` or NULL |
 | `memkit_patch_apply(patch)` | Apply memory patch | `bool` |
 | `memkit_patch_restore(patch)` | Restore original bytes | `bool` |
 | `memkit_patch_free(patch)` | Free patch resources | `void` |
+
+#### Enhanced Library Discovery (V2)
+
+On Android 12+, native libraries from split APKs may be mapped directly in-place from the APK without extraction. They don't appear as separate `.so` entries in `/proc/self/maps`, so `memkit_get_lib_base()` won't find them. Use `memkit_get_lib_base_v2()` which tries all methods:
+
+1. `/proc/self/maps` — fast, works for normal `.so` loading
+2. `xdl_iterate_phdr` — linker internals, finds libs loaded from APKs
+3. APK ZIP parsing — last resort, parses ZIP central directory of split APKs
+
+```c
+// Recommended: try all methods automatically
+uintptr_t base = memkit_get_lib_base_v2("libMyGame.so");
+if (base) {
+    LOGI("Found libMyGame.so at 0x%lx", base);
+} else {
+    LOGE("Library not found via any method");
+}
+
+// Or use the individual methods directly:
+// Method 1: /proc/self/maps (existing)
+uintptr_t base1 = memkit_get_lib_base("libMyGame.so");
+
+// Method 2: xdl_iterate_phdr (linker internals)
+uintptr_t base2 = memkit_get_lib_base_from_xdl("libMyGame.so");
+
+// Method 3: APK ZIP parsing (explicit ABI + entry path)
+uintptr_t base3 = 0;
+memkit_get_lib_base_in_apk("lib/arm64-v8a/libMyGame.so", &base3);
+```
+
+When using `memkit_get_lib_base_v2()`, the APK fallback automatically tries each ABI prefix (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, `riscv64`) in priority order.
 
 ### Hooking Functions
 
@@ -333,6 +368,7 @@ memkit_il2cpp_detach_thread(thread);
 | `memkit_xdl_open(name, flags)` | Open library handle | `void*` or NULL |
 | `memkit_xdl_close(handle)` | Close library handle | `bool` |
 | `memkit_xdl_get_lib_info(handle, &info)` | Get library details | `bool` |
+| `memkit_get_lib_base_from_xdl(lib_name)` | Find library base via xdl_iterate_phdr (linker internals) | `uintptr_t` or 0 |
 
 #### Symbol Resolution
 
@@ -903,6 +939,176 @@ thread_hook_stub = memkit_hook_by_symbol(
     (void**)&orig_il2cpp_thread_attach
 );
 ```
+
+---
+
+## JIT Compiler API
+
+MemKit integrates [SLJIT](https://github.com/zherczeg/sljit), a platform-independent JIT compiler. You can dynamically generate native code at runtime for creating optimized stubs, hook trampolines, or runtime code specialization.
+
+The API is split into two tiers:
+
+### Tier 1: Thin Wrappers (1:1 SLJIT Mapping)
+
+Thin wrappers follow SLJIT semantics with a `memkit_jit_` prefix. See `sljitLir.h` for full documentation. All emit functions return `sljit_s32` (`SLJIT_SUCCESS` = 0 on success).
+
+#### Lifecycle
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_jit_create_compiler()` | Create a new compiler instance | `struct sljit_compiler*` or NULL |
+| `memkit_jit_destroy_compiler(C)` | Destroy compiler | `void` |
+| `memkit_jit_get_error(C)` | Get last compiler error | `sljit_s32` |
+| `memkit_jit_generate_code(C)` | Compile to executable code | `void*` or NULL |
+| `memkit_jit_free_code(code)` | Free generated code | `void` |
+| `memkit_jit_has_cpu_feature(type)` | Check CPU feature support | `sljit_s32` |
+| `memkit_jit_get_platform_name()` | Get platform name string | `const char*` |
+
+#### Function Entry/Exit
+
+| Function | Description |
+|----------|-------------|
+| `memkit_jit_emit_enter(C, options, arg_types, scratches, saveds, local_size)` | Emit function prologue |
+| `memkit_jit_set_context(C, options, arg_types, scratches, saveds, local_size)` | Set function context |
+| `memkit_jit_emit_return_void(C)` | Emit void return |
+| `memkit_jit_emit_return(C, op, src, srcw)` | Emit return with value |
+| `memkit_jit_emit_return_to(C, src, srcw)` | Emit return to address |
+
+#### Instructions
+
+| Function | Description |
+|----------|-------------|
+| `memkit_jit_emit_op0(C, op)` | Zero-operand instruction (e.g., NOP) |
+| `memkit_jit_emit_op1(C, op, dst, dstw, src, srcw)` | One-operand instruction |
+| `memkit_jit_emit_op2(C, op, dst, dstw, src1, src1w, src2, src2w)` | Two-operand instruction |
+| `memkit_jit_emit_op2u(C, op, src1, src1w, src2, src2w)` | Two-operand (no dst) |
+| `memkit_jit_emit_op2r(C, op, dst_reg, src1, src1w, src2, src2w)` | Two-operand (reg dst) |
+| `memkit_jit_emit_shift_into(C, op, dst_reg, src1_reg, src2_reg, src3, src3w)` | Shift into register |
+| `memkit_jit_emit_op2_shift(C, op, dst, dstw, src1, src1w, src2, src2w, shift)` | Two-operand with shifted src |
+| `memkit_jit_emit_op_src(C, op, src, srcw)` | Source-only operation |
+| `memkit_jit_emit_op_dst(C, op, dst, dstw)` | Destination-only operation |
+
+#### Floating Point & SIMD
+
+| Function | Description |
+|----------|-------------|
+| `memkit_jit_emit_fop1(C, op, dst, dstw, src, srcw)` | Unary FP operation |
+| `memkit_jit_emit_fop2(C, op, dst, dstw, src1, src1w, src2, src2w)` | Binary FP operation |
+| `memkit_jit_emit_fcmp(C, type, src1, src1w, src2, src2w)` | FP compare (returns jump) |
+| `memkit_jit_emit_fset32(C, freg, value)` | Set 32-bit float constant |
+| `memkit_jit_emit_fset64(C, freg, value)` | Set 64-bit double constant |
+| `memkit_jit_emit_simd_mov(C, type, vreg, srcdst, srcdstw)` | SIMD register move |
+| `memkit_jit_emit_simd_op2(C, type, dst_vreg, src1_vreg, src2, src2w)` | SIMD binary operation |
+| `memkit_jit_emit_atomic_load(C, op, dst_reg, mem_reg)` | Atomic load |
+| `memkit_jit_emit_atomic_store(C, op, src_reg, mem_reg, temp_reg)` | Atomic store |
+
+#### Labels, Jumps & Calls
+
+| Function | Description |
+|----------|-------------|
+| `memkit_jit_emit_label(C)` | Emit label at current position |
+| `memkit_jit_emit_jump(C, type)` | Emit conditional/unconditional jump |
+| `memkit_jit_emit_cmp(C, type, src1, src1w, src2, src2w)` | Compare and conditional jump |
+| `memkit_jit_emit_ijump(C, type, src, srcw)` | Indirect jump |
+| `memkit_jit_emit_call(C, type, arg_types)` | Direct function call (returns jump) |
+| `memkit_jit_emit_icall(C, type, arg_types, src, srcw)` | Indirect function call |
+| `memkit_jit_emit_const(C, op, dst, dstw, init_value)` | Emit constant pool entry |
+| `memkit_jit_emit_op_addr(C, op, dst, dstw)` | Emit address of current position |
+
+#### Code Introspection
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_jit_get_executable_offset(C)` | Get offset to executable area | `sljit_sw` |
+| `memkit_jit_get_generated_code_size(C)` | Get generated code size | `sljit_uw` |
+| `memkit_jit_get_label_addr(label)` | Get label address in code | `sljit_uw` |
+| `memkit_jit_get_jump_addr(jump)` | Get jump address in code | `sljit_uw` |
+
+#### Serialization (AOT) & Stack
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_jit_serialize_compiler(C, options, &size)` | Serialize compiler for AOT | `sljit_uw*` |
+| `memkit_jit_deserialize_compiler(buf, size, options)` | Deserialize compiler | `struct sljit_compiler*` |
+| `memkit_jit_allocate_stack(start_size, max_size)` | Allocate JIT stack | `struct sljit_stack*` |
+| `memkit_jit_free_stack(stack)` | Free JIT stack | `void` |
+
+Full list of all ~80 thin wrappers is available in `include/memkit_jit.h`.
+
+### Tier 2: High-Level Wrappers
+
+Convenience functions built on top of the thin wrappers for common use cases:
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `memkit_jit_forwarder_create(target, num_args)` | Create forwarding trampoline (0-4 args) | `void*` or NULL |
+| `memkit_jit_forwarder_create_explicit(target, arg_types, num_scratches)` | Forwarder with explicit arg types | `void*` or NULL |
+| `memkit_jit_emit_nops(C, nop_count)` | Emit NOP sled | `sljit_s32` |
+| `memkit_jit_alloc_exec(size)` | Allocate RWX executable memory | `void*` or NULL |
+| `memkit_jit_free_exec(ptr, size)` | Free executable memory | `void` |
+| `memkit_jit_write_exec(ptr, data, size)` | Write data to executable memory (handles cache sync) | `bool` |
+
+### JIT Examples
+
+#### Basic JIT: `add_one(int x)`
+
+```c
+// JIT-compile: int add_one(int x) { return x + 1; }
+struct sljit_compiler *C = memkit_jit_create_compiler();
+
+memkit_jit_emit_enter(C, 0, SLJIT_ARGS1(W, W_R), 4, 0, 0);
+memkit_jit_emit_op2(C, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, 1);
+memkit_jit_emit_return(C, SLJIT_MOV, SLJIT_R0, 0);
+
+int (*add_one)(int) = (int (*)(int))memkit_jit_generate_code(C);
+memkit_jit_destroy_compiler(C);
+
+int result = add_one(41);  // returns 42
+memkit_jit_free_code((void*)add_one);
+```
+
+#### Forwarding Trampoline
+
+```c
+// Forward all args to an existing function
+int real_add(int a, int b) { return a + b; }
+
+int (*forwarder)(int, int) = (int (*)(int, int))
+    memkit_jit_forwarder_create((void*)real_add, 2);
+
+int result = forwarder(3, 4);  // returns 7
+memkit_jit_free_code((void*)forwarder);
+```
+
+#### Executable Memory Helpers
+
+```c
+// Allocate + write + execute custom shellcode
+size_t code_size = 128;
+void *exec = memkit_jit_alloc_exec(code_size);
+
+uint8_t code[] = { /* ... native instructions ... */ };
+memkit_jit_write_exec(exec, code, sizeof(code));
+
+// Execute:
+void (*func)(void) = (void (*)(void))exec;
+func();
+
+memkit_jit_free_exec(exec, code_size);
+```
+
+### Build Requirements
+
+To use the JIT API, link against SLJIT. The build system handles this automatically when you include `memkit.h`:
+
+```cmake
+# CMake: add_subdirectory already handles SLJIT
+target_link_libraries(your_target PRIVATE memkit)
+
+# Or Makefile: included automatically
+```
+
+Include `#include "memkit.h"` — it pulls in `memkit_jit.h` and `sljitLir.h` automatically.
 
 ---
 

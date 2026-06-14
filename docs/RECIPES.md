@@ -14,6 +14,8 @@ A collection of common patterns and use cases for security research.
 6. [Anti-Debugging Bypass](#anti-debugging-bypass)
 7. [Intercept API Patterns](#intercept-api-patterns)
 8. [IL2CPP Runtime Instrumentation](#il2cpp-runtime-instrumentation)
+9. [XDL Wrapper Recipes](#xdl-wrapper-recipes)
+10. [JIT Code Generation](#jit-code-generation)
 
 ---
 
@@ -542,7 +544,8 @@ static void intercept_at_offset(MemKitCpuContext* ctx, void* data) {
     LOGI("Hit specific instruction offset!");
 }
 
-uintptr_t base = memkit_get_lib_base("libtarget.so");
+// Use memkit_get_lib_base_v2() for Android 12+ APK-loaded libraries
+uintptr_t base = memkit_get_lib_base_v2("libtarget.so");
 void* target_instr = (void*)(base + 0x1234);  // Specific instruction
 
 void* stub = memkit_intercept_at_instr(
@@ -799,9 +802,24 @@ void list_loaded_libraries() {
 }
 ```
 
-### 2. Find Library Base Without Hardcoding
+### 2. Find Library Base (Recommended)
+
+For Android 12+ where libraries may be loaded in-place from split APKs, use the enhanced discovery:
 
 ```c
+// Method A: Auto-detect (tries maps → xdl → APK ZIP parsing)
+uintptr_t base = memkit_get_lib_base_v2("libMyGame.so");
+if (base) {
+    LOGI("Found at 0x%lx", base);
+}
+
+// Method B: Direct xdl lookup (linker internals, no APK parsing)
+uintptr_t base2 = memkit_get_lib_base_from_xdl("libil2cpp.so");
+if (base2) {
+    LOGI("Found via xdl at 0x%lx", base2);
+}
+
+// Method C: Manual iteration (custom logic)
 typedef struct {
     const char* name;
     uintptr_t base;
@@ -809,11 +827,10 @@ typedef struct {
 
 static bool find_lib_callback(const MemKitLibInfo* info, void* user_data) {
     find_ctx_t* ctx = (find_ctx_t*)user_data;
-    
     if (strstr(info->name, ctx->name) != NULL) {
         ctx->base = info->base;
         LOGI("Found %s at 0x%lx", info->name, ctx->base);
-        return false;  // Stop
+        return false;
     }
     return true;
 }
@@ -823,10 +840,6 @@ uintptr_t find_library_base(const char* partial_name) {
     memkit_xdl_iterate(find_lib_callback, &ctx, XDL_DEFAULT);
     return ctx.base;
 }
-
-// Usage
-uintptr_t il2cpp_base = find_library_base("il2cpp");
-uintptr_t libc_base = find_library_base("libc.so");
 ```
 
 ### 3. Symbolicate Stack Addresses
@@ -960,6 +973,114 @@ void quick_resolve() {
     void* malloc_sym = XDL_RESOLVE_SIZE("libc.so", "malloc", &size);
     LOGI("libc::malloc = %p (size: %zu)", malloc_sym, size);
 }
+```
+
+---
+
+## JIT Code Generation
+
+Generate native code at runtime using the SLJIT-based JIT compiler. Useful for creating optimized function stubs, hook trampolines, and runtime code specialization.
+
+### 1. Basic JIT Function
+
+```c
+// JIT-compile: int add_one(int x) { return x + 1; }
+struct sljit_compiler *C = memkit_jit_create_compiler();
+
+memkit_jit_emit_enter(C, 0, SLJIT_ARGS1(W, W_R), 4, 0, 0);
+memkit_jit_emit_op2(C, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, 1);
+memkit_jit_emit_return(C, SLJIT_MOV, SLJIT_R0, 0);
+
+int (*add_one)(int) = (int (*)(int))memkit_jit_generate_code(C);
+memkit_jit_destroy_compiler(C);
+
+int result = add_one(41);  // returns 42
+memkit_jit_free_code((void*)add_one);
+```
+
+### 2. Forwarding Trampoline
+
+Redirect calls from one function to another without manual LIR emission:
+
+```c
+static int real_add(int a, int b) { return a + b; }
+
+int (*forwarder)(int, int) = (int (*)(int, int))
+    memkit_jit_forwarder_create((void*)real_add, 2);
+
+int result = forwarder(3, 4);  // returns 7
+memkit_jit_free_code((void*)forwarder);
+```
+
+### 3. Dynamic Hook Trampoline
+
+Generate a trampoline that calls the original function and logs arguments:
+
+```c
+// Target: void draw(int x, int y)
+static void (*orig_draw)(int, int) = NULL;
+
+// JIT trampoline that logs and forwards
+static void* create_log_trampoline(void* target) {
+    struct sljit_compiler *C = memkit_jit_create_compiler();
+
+    // void trampoline(int x, int y)
+    memkit_jit_emit_enter(C, 0, SLJIT_ARGS2(V, W_R, W_R), 4, 0, 0);
+
+    // Log args via __android_log_print (pseudo: push args, call, restore)
+    // For brevity: just forward all args to target
+    memkit_jit_emit_icall(C, SLJIT_CALL, SLJIT_ARGS2(V, W_R, W_R),
+                          SLJIT_IMM, (sljit_sw)target);
+    memkit_jit_emit_return_void(C);
+
+    void *code = memkit_jit_generate_code(C);
+    memkit_jit_destroy_compiler(C);
+    return code;
+}
+
+void init_dynamic_hook() {
+    uintptr_t base = memkit_get_lib_base_v2("libtarget.so");
+    void* draw_addr = (void*)(base + 0x1234);
+
+    void* trampoline = create_log_trampoline(draw_addr);
+    // memkit_hook(draw_addr, trampoline, (void**)&orig_draw);
+}
+```
+
+### 4. Executable Memory Helpers
+
+Allocate, write, and execute custom code without full JIT:
+
+```c
+// Allocate executable memory
+size_t size = 4096;
+void* exec = memkit_jit_alloc_exec(size);
+
+// Write shellcode (must be position-independent)
+uint8_t code[] = {
+    0x00, 0x00, 0x80, 0xD2,  // MOV X0, #0
+    0xC0, 0x03, 0x5F, 0xD6,  // RET
+};
+memkit_jit_write_exec(exec, code, sizeof(code));
+
+// Execute
+void (*func)(void) = (void (*)(void))exec;
+func();
+
+// Cleanup
+memkit_jit_free_exec(exec, size);
+```
+
+### 5. Platform Info
+
+```c
+// Check available CPU features and platform
+if (memkit_jit_has_cpu_feature(SLJIT_HAS_FPU)) {
+    LOGI("FPU available — can use float ops");
+}
+
+const char* platform = memkit_jit_get_platform_name();
+LOGI("JIT platform: %s", platform);  // e.g., "arm64", "x86"
 ```
 
 ---
