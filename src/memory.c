@@ -424,7 +424,7 @@ static uint32_t read_le32(const uint8_t* p) {
 }
 
 static uint16_t read_le16(const uint8_t* p) {
-    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
 /**
@@ -580,7 +580,7 @@ static bool zip_find_entry_in_cd(FILE* apk, uint64_t cd_offset,
     uint64_t current = cd_offset;
 
     for (uint32_t i = 0; i < cd_entries; i++) {
-        if (fseeko64(apk, current, SEEK_SET)) return false;
+        if (fseeko64(apk, (off64_t)current, SEEK_SET)) return false;
         if (fread(cd_entry, 1, 46, apk) != 46) return false;
         if (read_le32(cd_entry) != ZIP_CENTRAL_MAGIC) return false;
 
@@ -615,7 +615,7 @@ static bool zip_find_entry_in_cd(FILE* apk, uint64_t cd_offset,
  */
 static uint64_t zip_read_local_data_offset(FILE* apk, uint64_t local_off,
                                             off64_t file_size) {
-    if (fseeko64(apk, local_off, SEEK_SET)) return 0;
+    if (fseeko64(apk, (off64_t)local_off, SEEK_SET)) return 0;
 
     uint8_t lfh[30];
     if (fread(lfh, 1, 30, apk) != 30) return 0;
