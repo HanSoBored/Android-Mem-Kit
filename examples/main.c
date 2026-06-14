@@ -127,8 +127,97 @@ static void* (*orig_il2cpp_domain_get)(void) = NULL;
 static void* (*orig_il2cpp_thread_attach)(void*) = NULL;
 
 // ============================================================================
-// MAIN RESEARCH THREAD
+// EXAMPLE 5: JIT Code Generation (SLJIT)
 // ============================================================================
+// Use case: Dynamically generate native code at runtime for:
+//   - Creating optimized function stubs
+//   - Generating hook trampolines
+//   - Runtime code specialization
+
+/**
+ * JIT-compiled "add one" function: int add_one(int x) { return x + 1; }
+ * Demonstrates SLJIT LIR emission. The JIT-generated function is
+ * architecture-independent (ARM64, ARM32, x86, etc.).
+ */
+static void demo_jit_add_one(void) {
+    LOGI("[JIT Demo] Creating JIT-compiled 'add_one' function...");
+
+    struct sljit_compiler *C = memkit_jit_create_compiler();
+    if (!C) {
+        LOGE("[JIT Demo] Failed to create compiler");
+        return;
+    }
+
+    // Emit: int add_one(int x) { return x + 1; }
+    // SLJIT_ARGS1(W, W) = one W-sized arg, W-sized return
+    sljit_s32 result;
+    result = memkit_jit_emit_enter(C, 0, SLJIT_ARGS1(W, W_R), 4, 0, 0);
+    if (result != SLJIT_SUCCESS) { LOGE("[JIT Demo] emit_enter failed"); goto cleanup; }
+
+    // R0 = arg1 (x), R1 available as scratch
+    // result = R0 + 1
+    result = memkit_jit_emit_op2(C, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, 1);
+    if (result != SLJIT_SUCCESS) { LOGE("[JIT Demo] emit_op2 failed"); goto cleanup; }
+
+    // return R0
+    result = memkit_jit_emit_return(C, SLJIT_MOV, SLJIT_R0, 0);
+    if (result != SLJIT_SUCCESS) { LOGE("[JIT Demo] emit_return failed"); goto cleanup; }
+
+    // Compile to executable code
+    int (*add_one)(int) = (int (*)(int))memkit_jit_generate_code(C);
+    if (!add_one) {
+        LOGE("[JIT Demo] generate_code failed");
+        goto cleanup;
+    }
+
+    // Test it
+    int test_val = 41;
+    int jit_result = add_one(test_val);
+    LOGI("[JIT Demo] add_one(%d) = %d (expected: 42)", test_val, jit_result);
+
+    if (jit_result == 42) {
+        LOGI("[JIT Demo] JIT compilation SUCCESSFUL!");
+    } else {
+        LOGE("[JIT Demo] JIT compilation produced wrong result!");
+    }
+
+    memkit_jit_free_code((void*)add_one);
+
+cleanup:
+    memkit_jit_destroy_compiler(C);
+}
+
+/**
+ * JIT-compiled forwarder demo.
+ * Creates a forwarding trampoline that redirects calls to an existing function.
+ */
+static int real_add(int a, int b) {
+    return a + b;
+}
+
+static void demo_jit_forwarder(void) {
+    LOGI("[JIT Demo] Creating JIT forwarding trampoline...");
+
+    // Create a forwarder that calls real_add(2 args)
+    int (*forwarder)(int, int) = (int (*)(int, int))
+        memkit_jit_forwarder_create((void*)real_add, 2);
+
+    if (!forwarder) {
+        LOGE("[JIT Demo] Forwarder creation failed");
+        return;
+    }
+
+    int result = forwarder(3, 4);
+    LOGI("[JIT Demo] forwarder(3, 4) = %d (expected: 7)", result);
+
+    if (result == 7) {
+        LOGI("[JIT Demo] Forwarder SUCCESSFUL!");
+    } else {
+        LOGE("[JIT Demo] Forwarder produced wrong result!");
+    }
+
+    memkit_jit_free_code((void*)forwarder);
+}
 
 static void* research_thread(void* arg) {
     (void)arg;
@@ -297,6 +386,13 @@ static void* research_thread(void* arg) {
         
         LOGI("Memory patching API ready for use");
     }
+
+    // -------------------------------------------------------------------------
+    // Step 8: JIT Code Generation Demo
+    // -------------------------------------------------------------------------
+    LOGI("Demonstrating JIT code generation (SLJIT)...");
+    demo_jit_add_one();
+    demo_jit_forwarder();
 
     // -------------------------------------------------------------------------
     // Summary
