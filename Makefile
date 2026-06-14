@@ -70,7 +70,14 @@ INCLUDES = -Iinclude \
            -Ideps/shadowhook/shadowhook/src/main/cpp/arch/$(SH_ARCH) \
            -Ideps/shadowhook/shadowhook/src/main/cpp/third_party/bsd \
            -Ideps/shadowhook/shadowhook/src/main/cpp/third_party/xdl \
-           -Ideps/shadowhook/shadowhook/src/main/cpp/third_party/lss
+           -Ideps/shadowhook/shadowhook/src/main/cpp/third_party/lss \
+           -Ideps/sljit/sljit_src
+
+# SLJIT configuration: W^X-compatible allocator, single-threaded, release mode
+SLJIT_CFLAGS = -DSLJIT_SINGLE_THREADED=1 \
+               -DSLJIT_WX_EXECUTABLE_ALLOCATOR=1 \
+               -DSLJIT_DEBUG=0 \
+               -DSLJIT_VERBOSE=0
 
 SHARED_LDFLAGS = -shared -llog -landroid \
           -Wl,--wrap,dlopen \
@@ -78,7 +85,9 @@ SHARED_LDFLAGS = -shared -llog -landroid \
 
 TEST_LDFLAGS = -pie -llog -landroid
 
-MEMKIT_SRCS = src/memory.c src/hooking.c src/hooking_flags.c src/intercept.c src/records.c src/runtime_config.c src/dl_callbacks.c src/il2cpp.c src/il2cpp_safe.c src/xdl_wrapper.c src/nothing_path.c src/shadowhook_override.c
+MEMKIT_SRCS = src/memory.c src/hooking.c src/hooking_flags.c src/intercept.c src/records.c src/runtime_config.c src/dl_callbacks.c src/il2cpp.c src/il2cpp_safe.c src/xdl_wrapper.c src/nothing_path.c src/shadowhook_override.c src/jit.c src/jit_highlevel.c
+SLJIT_DIR = deps/sljit/sljit_src
+SLJIT_SRCS = $(SLJIT_DIR)/sljitLir.c
 SH_DIR = deps/shadowhook/shadowhook/src/main/cpp
 SH_SRCS = $(SH_DIR)/arch/$(SH_ARCH)/sh_inst.c \
           $(SH_DIR)/arch/$(SH_ARCH)/sh_glue.S \
@@ -112,11 +121,12 @@ else
   SH_SRCS += $(SH_DIR)/arch/arm/sh_a32.c $(SH_DIR)/arch/arm/sh_t32.c
 endif
 
-ALL_SRCS = $(MEMKIT_SRCS) $(SH_SRCS)
+ALL_SRCS = $(MEMKIT_SRCS) $(SH_SRCS) $(SLJIT_SRCS)
 MEMKIT_OBJS = $(patsubst %.c,$(OBJ_DIR)/%.o,$(MEMKIT_SRCS))
 SH_OBJS_C = $(patsubst $(SH_DIR)/%.c,$(OBJ_DIR)/shadowhook/%.o,$(filter %.c,$(SH_SRCS)))
 SH_OBJS_S = $(patsubst $(SH_DIR)/%.S,$(OBJ_DIR)/shadowhook/%.o,$(filter %.S,$(SH_SRCS)))
-ALL_OBJS = $(MEMKIT_OBJS) $(SH_OBJS_C) $(SH_OBJS_S)
+SLJIT_OBJS = $(patsubst $(SLJIT_DIR)/%.c,$(OBJ_DIR)/sljit/%.o,$(SLJIT_SRCS))
+ALL_OBJS = $(MEMKIT_OBJS) $(SH_OBJS_C) $(SH_OBJS_S) $(SLJIT_OBJS)
 
 # Progress calculation
 TOTAL_FILES := $(words $(ALL_SRCS))
@@ -177,6 +187,7 @@ directories:
 	@mkdir -p $(OBJ_DIR)/shadowhook/common
 	@mkdir -p $(OBJ_DIR)/shadowhook/nothing
 	@mkdir -p $(OBJ_DIR)/shadowhook/third_party/xdl
+	@mkdir -p $(OBJ_DIR)/sljit
 	@mkdir -p $(OBJ_DIR)/tests
 	@mkdir -p $(LIB_DIR)
 	@mkdir -p $(GEN_DIR)
@@ -238,6 +249,12 @@ $(OBJ_DIR)/shadowhook/%.o: $(SH_DIR)/%.S
 	$(call print_progress,"[AS]","$<",$(PERCENT))
 	@$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
+# SLJIT C sources
+$(OBJ_DIR)/sljit/%.o: $(SLJIT_DIR)/%.c
+	$(call update_progress)
+	$(call print_progress,"[CC]","$<",$(PERCENT))
+	@$(CC) $(CFLAGS) $(SLJIT_CFLAGS) $(INCLUDES) -c $< -o $@
+
 clean:
 	@echo "$(WHITE)Cleaning build directory...$(RESET)"
 	@echo ""
@@ -289,6 +306,7 @@ cppcheck:
 	          -Iinclude -I$(GEN_DIR) -Isrc \
 	          -Ideps/xdl/xdl/src/main/cpp/include \
 	          -Ideps/shadowhook/shadowhook/src/main/cpp/include \
+	          -Ideps/sljit/sljit_src \
 	          $(MEMKIT_SRCS) 2>&1 | tee build/cppcheck-report.txt
 	@echo "$(GREEN)Cppcheck complete. Results saved to build/cppcheck-report.txt$(RESET)"
 

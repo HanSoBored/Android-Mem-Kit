@@ -208,6 +208,26 @@ if(USE_LOCAL_DEPS)
         )
         
         message(STATUS "Using local ShadowHook: ${SHADOWHOOK_DIR}")
+
+    # SLJIT library
+    set(SLJIT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/sljit)
+    if(EXISTS ${SLJIT_DIR})
+        include_directories(${SLJIT_DIR}/sljit_src)
+        set(SLJIT_SOURCES
+            ${SLJIT_DIR}/sljit_src/sljitLir.c
+        )
+        add_library(sljit STATIC ${SLJIT_SOURCES})
+        target_compile_definitions(sljit PRIVATE
+            SLJIT_SINGLE_THREADED=1
+            SLJIT_WX_EXECUTABLE_ALLOCATOR=1
+            SLJIT_DEBUG=0
+            SLJIT_VERBOSE=0
+        )
+        message(STATUS "Using local SLJIT: ${SLJIT_DIR}")
+    else()
+        message(WARNING "Local SLJIT not found. Clone deps via 'git submodule update --init --recursive'")
+    endif()
+
     else()
         message(WARNING "Local ShadowHook not found. Clone deps via 'git submodule update --init --recursive' or set USE_LOCAL_DEPS=OFF")
     endif()
@@ -289,6 +309,8 @@ add_library(memkit ${LIB_TYPE}
     src/xdl_wrapper.c
     src/nothing_path.c
     src/shadowhook_override.c
+    src/jit.c
+    src/jit_highlevel.c
 )
 
 # Add dependency on generated header
@@ -301,6 +323,7 @@ set_target_properties(memkit PROPERTIES LINKER_LANGUAGE C)
 
 target_include_directories(memkit PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include          # memkit.h (public API)
+    ${CMAKE_CURRENT_SOURCE_DIR}/deps/sljit/sljit_src  # sljitLir.h (public API, included by memkit.h)
 )
 if(DEFINED SHADOWHOOK_DIR)
     # shadowhook.h is PUBLIC because memkit.h includes it
@@ -314,9 +337,18 @@ target_include_directories(memkit PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/gen
 )
 
+# SLJIT configuration for Android — W^X compatible allocator, single-threaded
+target_compile_definitions(memkit PRIVATE
+    SLJIT_SINGLE_THREADED=1
+    SLJIT_WX_EXECUTABLE_ALLOCATOR=1
+    SLJIT_DEBUG=0
+    SLJIT_VERBOSE=0
+)
+
 target_link_libraries(memkit
     xdl
     shadowhook
+    sljit
     log
     android
 )
